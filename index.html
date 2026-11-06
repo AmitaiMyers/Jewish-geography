@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="Map the people you know and discover how they are connected." />
+    <meta name="theme-color" content="#1d3a6e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="J-Geo" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <title>Jewish Geography</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <h1 id="title">Jewish Geography</h1>
+      <input id="search" type="search" autocomplete="off" />
+    </header>
+    <main id="views"></main>
+    <nav id="tabs" class="tabbar"></nav>
+
+    <dialog id="person-sheet" class="sheet"></dialog>
+    <dialog id="import-sheet" class="sheet"></dialog>
+    <dialog id="onboarding" class="sheet"></dialog>
+    <div id="toast" role="status" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

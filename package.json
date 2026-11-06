@@ -1,0 +1,26 @@
+{
+  "name": "jewish-geography",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A PWA that maps the people you know as a graph and finds how they are connected.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "icons": "node scripts/render-icons.mjs"
+  },
+  "dependencies": {
+    "cytoscape": "^3.34.4",
+    "cytoscape-fcose": "^2.2.0",
+    "idb": "^8.0.4"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vite-plugin-pwa": "^2.0.0",
+    "vitest": "^5.1.0"
+  }
+}
