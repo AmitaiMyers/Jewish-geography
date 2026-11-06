@@ -1,7 +1,7 @@
-# Design system: Phase 1 proposal
+# Design system
 
-> Status: **for approval**. Nothing here is built yet; the shipped stage-1 UI is functional but plain.
-> Once approved, Phase 2 rebuilds the front end on these tokens and components.
+> Status: **approved and implemented** (tokens in `src/styles.css`, components in `src/ui/`).
+> Section 8 lists where the build differs from the original proposal.
 
 ## 1. Design language: "Warm network"
 
@@ -163,3 +163,14 @@ Rules applied throughout:
 | Graph | Cytoscape stays. Visual styles are generated from the same CSS tokens, so light/dark and the brand stay in sync. Avatar initials are drawn as node backgrounds (SVG data URIs, cached per person). |
 | Motion | Web Animations API with the motion tokens, wrapped in one `animate()` helper that honours reduced motion. |
 | Quality gates | Unit tests (existing), a Playwright smoke test of the user journey in English and Hebrew, an axe-core accessibility scan in CI, and a Lighthouse PWA/performance budget (JS under 250 KB gzipped). |
+
+## 8. Implementation notes (where the build differs)
+
+| Proposal | Built | Why |
+|---|---|---|
+| Ripple on primary buttons | Press-to-scale (0.97, spring) on all buttons | One consistent press effect; ripple added noise on dense rows. |
+| Neighbours "fan out" when a person is tapped | The camera frames the person and their neighbours; everything else fades | Moving nodes would fight the layout and confuse spatial memory. |
+| Suggestion card "collapses into the graph thumbnail" | The card flies off in the swipe direction; the graph shows the new link after closing | No graph is visible inside the sheet. |
+| Lighthouse performance budget in CI | Bundle-size budget (`npm run check:bundle`, 250 KB gzipped) plus axe in Playwright | Deterministic in CI; Lighthouse scores vary run to run. |
+| `--color-family` for family tags | New `--color-family-text` token (#8F4A2C light / #F0A875 dark) | Terracotta on its own tint measured 4.0:1 in axe; the text token gives 5.5:1 / 6.0:1. |
+| Undo instead of every confirmation | Undo for every delete; **Restore backup** still asks first | A restore replaces everything and has nothing to undo to. |

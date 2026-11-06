@@ -25,11 +25,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm test
-      - run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: End-to-end + accessibility tests (Playwright, axe)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+      - name: Production build for GitHub Pages
+        run: npm run build
         env:
           # GitHub Pages serves the site from https://<user>.github.io/<repo>/
           BASE_PATH: /${{ github.event.repository.name }}/
+      - name: Bundle size budget
+        run: npm run check:bundle
       - uses: actions/upload-pages-artifact@v4
         if: github.ref == 'refs/heads/main'
         with:

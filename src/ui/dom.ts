@@ -1,11 +1,14 @@
+import { checkIcon } from './icons';
+
 /** Tiny DOM helpers: enough structure to avoid a framework, nothing clever. */
 
 type Child = Node | string | null | false;
 type Attributes = Record<string, string | number | boolean | EventListener | null>;
 
 /**
- * h('button', { class: 'primary', onclick: save }, 'Save')
- * Attributes starting with "on" become event listeners; false/null attributes are skipped.
+ * h('button', { class: 'btn', onclick: save }, 'Save')
+ * "on*" attributes become listeners; null/false attributes are skipped;
+ * known DOM properties (value, checked, disabled…) are set as properties.
  */
 export function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -19,7 +22,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
     }
     if (typeof value === 'function') {
       element.addEventListener(name.slice(2), value);
-    } else if (name in element && name !== 'list' && name !== 'class') {
+    } else if (name in element && name !== 'list' && name !== 'class' && name !== 'role' && !name.startsWith('aria')) {
       (element as unknown as Record<string, unknown>)[name] = value;
     } else {
       element.setAttribute(name, value === true ? '' : String(value));
@@ -29,7 +32,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   return element;
 }
 
-export function append(parent: HTMLElement, children: Child[]): void {
+export function append(parent: Element, children: Child[]): void {
   for (const child of children) {
     if (child !== null && child !== false) {
       parent.append(child);
@@ -37,7 +40,7 @@ export function append(parent: HTMLElement, children: Child[]): void {
   }
 }
 
-export function replaceChildren(parent: HTMLElement, ...children: Child[]): void {
+export function replaceChildren(parent: Element, ...children: Child[]): void {
   parent.replaceChildren();
   append(parent, children);
 }
@@ -50,15 +53,54 @@ export function byId<T extends HTMLElement>(id: string): T {
   return element as T;
 }
 
+/** Wraps a name so mixed Hebrew/English text keeps its own direction. */
+export function bdi(text: string): HTMLElement {
+  return h('bdi', {}, text);
+}
+
+let idCounter = 0;
+export function uniqueId(prefix: string): string {
+  idCounter++;
+  return `${prefix}-${idCounter}`;
+}
+
+// ---------- toast ----------
+
+export interface ToastOptions {
+  /** e.g. Undo. The toast stays longer when it has an action. */
+  action?: { label: string; run: () => void | Promise<void> };
+  success?: boolean;
+}
+
 let toastTimer: number | undefined;
 
-export function toast(message: string, action?: { label: string; run: () => void }): void {
+export function toast(message: string, options: ToastOptions = {}): void {
   const container = byId('toast');
-  replaceChildren(container, h('span', {}, message), action ? h('button', { class: 'link', onclick: action.run }, action.label) : null);
-  container.classList.add('visible');
+  const { action, success = false } = options;
+  replaceChildren(
+    container,
+    success ? checkIcon() : null,
+    h('span', { class: 'grow' }, message),
+    action
+      ? h(
+          'button',
+          {
+            class: 'btn',
+            onclick: async () => {
+              container.classList.remove('is-visible');
+              await action.run();
+            },
+          },
+          action.label,
+        )
+      : null,
+  );
+  container.classList.add('is-visible');
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => container.classList.remove('visible'), action ? 10000 : 4000);
+  toastTimer = window.setTimeout(() => container.classList.remove('is-visible'), action ? 7000 : 3500);
 }
+
+// ---------- files ----------
 
 /** Splits "a, b ,c" into ["a","b","c"]. */
 export function splitList(text: string): string[] {
@@ -88,8 +130,4 @@ export function chooseTextFile(accept: string): Promise<{ name: string; text: st
     input.addEventListener('cancel', () => resolve(null));
     input.click();
   });
-}
-
-export function groupDots(colors: readonly string[]): HTMLElement {
-  return h('span', { class: 'dots' }, ...colors.map((color) => h('span', { class: 'dot', style: `background:${color}` })));
 }

@@ -1,36 +1,31 @@
 import type { ElementDefinition } from 'cytoscape';
 import { isFamilyType } from '../model/types';
 import type { AppStore } from '../store/appStore';
+import { avatarDataUri, currentTheme } from './avatar';
 import { groupColors } from './context';
 
 /**
  * Converts the store into Cytoscape elements.
  *
- * Besides people and relations it adds invisible layout helpers:
+ * People are drawn as avatar images (initials + group-colour ring).
+ * Invisible layout helpers keep the picture readable:
  *  - one hidden "hub" per group, tied to every member, so groups gather into clusters;
  *  - hidden "anchor" links from me to each hub and to unconnected people,
  *    so the whole picture stays one compact component around me.
  */
-
-export const MAX_PIE_SLICES = 6;
 
 export const hubId = (groupId: string): string => `hub:${groupId}`;
 
 export function buildGraphElements(store: AppStore): ElementDefinition[] {
   const meId = store.meId;
   const index = store.index;
+  const theme = currentTheme();
   const elements: ElementDefinition[] = [];
 
   for (const person of store.people.values()) {
-    const colors = groupColors(store, person).slice(0, MAX_PIE_SLICES);
-    const pie: Record<string, string | number> = {};
-    for (let slice = 1; slice <= MAX_PIE_SLICES; slice++) {
-      pie[`pie${slice}Color`] = colors[slice - 1] ?? '#000000';
-      pie[`pie${slice}Size`] = slice <= colors.length ? 100 / colors.length : 0;
-    }
     elements.push({
       group: 'nodes',
-      data: { id: person.id, label: person.name, groupCount: colors.length, ...pie },
+      data: { id: person.id, label: person.name, avatar: avatarDataUri(person.name, groupColors(store, person), theme) },
       classes: person.id === meId ? 'person me' : 'person',
     });
     if (person.id !== meId && person.groupIds.length === 0 && index.degree(person.id) === 0) {

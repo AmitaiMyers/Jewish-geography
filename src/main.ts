@@ -1,8 +1,9 @@
 import { registerSW } from 'virtual:pwa-register';
 import { applyLanguageToDocument, setLanguage, t } from './i18n/i18n';
 import { AppStore } from './store/appStore';
-import { App, runOnboarding } from './ui/app';
+import { App } from './ui/app';
 import { toast } from './ui/dom';
+import { runOnboarding } from './ui/onboarding';
 import './styles.css';
 
 /** Fail fast, but visibly: any unexpected error is shown instead of silently swallowed. */
@@ -18,12 +19,18 @@ registerSW({ immediate: true });
 
 async function main(): Promise<void> {
   const store = await AppStore.load();
-  if (!store.isOnboarded) {
+  const firstRun = !store.isOnboarded;
+  if (firstRun) {
     await runOnboarding(store);
   }
   setLanguage(store.settings.language);
   applyLanguageToDocument();
-  new App(store).start();
+  const app = new App(store);
+  app.start();
+  document.body.classList.remove('is-loading');
+  if (firstRun) {
+    app.openImport(true);
+  }
 }
 
 void main();

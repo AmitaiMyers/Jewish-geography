@@ -1,49 +1,53 @@
 import { applyLanguageToDocument, language, setLanguage, t } from '../i18n/i18n';
 import type { StringKey } from '../i18n/strings';
-import type { Language } from '../model/types';
-import type { AppStore } from '../store/appStore';
+import type { AppStore, Snapshot } from '../store/appStore';
+import { openMyCode, openScanner } from './compareFlow';
+import { askText, type Snap } from './components/sheet';
 import { ConnectView } from './connectView';
 import type { AppContext, Highlight, TabName, View } from './context';
-import { byId, h, replaceChildren } from './dom';
+import { byId, h, replaceChildren, toast } from './dom';
 import { GraphView } from './graphView';
-import { GroupsView } from './groupsView';
-import { MoreView } from './moreView';
+import { icon, type IconName } from './icons';
+import { openImportSheet } from './importFlow';
+import { MeView } from './meView';
+import { haptic } from './motion';
 import { PeopleView } from './peopleView';
 import { PersonSheet } from './personSheet';
+import { openSearch } from './searchCommand';
+import { openSuggestionCards } from './suggestionsFlow';
 
-const TABS: readonly { name: TabName; icon: string; label: StringKey }[] = [
-  { name: 'graph', icon: '◉', label: 'tabGraph' },
-  { name: 'people', icon: '☰', label: 'tabPeople' },
-  { name: 'groups', icon: '◍', label: 'tabGroups' },
-  { name: 'connect', icon: '⇄', label: 'tabConnect' },
-  { name: 'more', icon: '⋯', label: 'tabMore' },
+const TABS: readonly { name: TabName; icon: IconName; label: StringKey }[] = [
+  { name: 'graph', icon: 'graph', label: 'tabGraph' },
+  { name: 'people', icon: 'people', label: 'tabPeople' },
+  { name: 'connect', icon: 'connect', label: 'tabConnect' },
+  { name: 'me', icon: 'me', label: 'tabMe' },
 ];
 
-/** App shell: top bar with search, the five tabs, and the person sheet. */
+/** App shell: header with the search trigger, four tabs, and the shared person sheet. */
 export class App implements AppContext {
   private readonly graph: GraphView;
+  private readonly connect: ConnectView;
   private readonly views: Record<TabName, View>;
   private readonly sheet: PersonSheet;
-  private readonly search = byId<HTMLInputElement>('search');
   private active: TabName = 'graph';
 
   constructor(readonly store: AppStore) {
     this.graph = new GraphView(this);
-    this.views = {
-      graph: this.graph,
-      people: new PeopleView(this),
-      groups: new GroupsView(this),
-      connect: new ConnectView(this),
-      more: new MoreView(this),
-    };
+    this.connect = new ConnectView(this);
+    this.views = { graph: this.graph, people: new PeopleView(this), connect: this.connect, me: new MeView(this) };
     this.sheet = new PersonSheet(this);
 
     const main = byId('views');
-    for (const [name, view] of Object.entries(this.views)) {
-      view.element.hidden = name !== this.active;
+    main.replaceChildren(); // drop the loading skeleton
+    for (const tab of TABS) {
+      const view = this.views[tab.name];
+      view.element.id = `view-${tab.name}`;
+      view.element.setAttribute('role', 'tabpanel');
+      view.element.setAttribute('aria-labelledby', `tab-${tab.name}`);
+      view.element.hidden = tab.name !== this.active;
       main.append(view.element);
     }
-    this.search.addEventListener('input', () => this.views[this.active].setQuery(this.search.value));
+    byId('search-trigger').addEventListener('click', () => this.openSearch());
     store.subscribe(() => this.refresh());
   }
 
@@ -52,8 +56,19 @@ export class App implements AppContext {
     this.views[this.active].onShow();
   }
 
-  openPerson(personId: string): void {
-    this.sheet.open(personId);
+  // ---------- AppContext ----------
+
+  navigate(tab: TabName): void {
+    if (tab === this.active) return;
+    this.views[this.active].element.hidden = true;
+    this.active = tab;
+    this.views[tab].element.hidden = false;
+    this.views[tab].onShow();
+    this.renderChrome();
+  }
+
+  openPerson(personId: string, snap?: Snap): void {
+    this.sheet.open(personId, snap);
   }
 
   showOnGraph(highlight: Highlight): void {
@@ -61,18 +76,51 @@ export class App implements AppContext {
     this.graph.show(highlight);
   }
 
-  navigate(tab: TabName): void {
-    if (tab === this.active) {
-      return;
-    }
-    this.views[this.active].element.hidden = true;
-    this.active = tab;
-    const view = this.views[tab];
-    view.element.hidden = false;
-    view.setQuery(this.search.value);
-    view.onShow();
-    this.renderChrome();
+  showConnection(fromId: string, toId: string): void {
+    this.connect.setPair(fromId, toId);
+    if (this.active === 'connect') this.connect.render();
+    this.navigate('connect');
   }
+
+  openSearch(): void {
+    openSearch(this);
+  }
+
+  openImport(welcome = false): void {
+    openImportSheet(this, welcome);
+  }
+
+  openSuggestions(): void {
+    openSuggestionCards(this);
+  }
+
+  openCompare(mode: 'show' | 'scan'): void {
+    if (mode === 'show') openMyCode(this);
+    else openScanner(this);
+  }
+
+  async addPerson(): Promise<void> {
+    const name = await askText(t('newPersonTitle'), t('name'));
+    if (name === null) return;
+    const person = await this.store.addPerson({ name, gender: 'unknown', phones: [], emails: [], groupIds: [], notes: '', source: 'manual' });
+    haptic();
+    this.openPerson(person.id, 'half');
+  }
+
+  async createGroup(): Promise<void> {
+    const name = await askText(t('newGroup'), t('groupName'));
+    if (name === null) return;
+    await this.store.createGroup(name);
+    toast(name, { success: true });
+  }
+
+  async deleteWithUndo(message: string, run: () => Promise<Snapshot>): Promise<void> {
+    const snapshot = await run();
+    haptic();
+    toast(message, { action: { label: t('undo'), run: () => this.store.restore(snapshot) } });
+  }
+
+  // ---------- rendering ----------
 
   private refresh(): void {
     if (language() !== this.store.settings.language) {
@@ -88,69 +136,42 @@ export class App implements AppContext {
 
   private renderChrome(): void {
     document.title = t('appName');
-    byId('title').textContent = t('appName');
-    this.search.placeholder = t('search');
-    this.search.hidden = this.active !== 'graph' && this.active !== 'people';
+    byId('brand-name').textContent = t('appName');
+    replaceChildren(byId('search-trigger'), icon('search'), h('span', {}, t('searchEverything')));
+    const tabs = byId('tabs');
+    tabs.setAttribute('aria-label', t('mainNavigation'));
     const suggestionCount = this.store.suggestions.size;
     replaceChildren(
-      byId('tabs'),
+      tabs,
       ...TABS.map((tab) =>
         h(
           'button',
           {
-            class: `tab ${tab.name === this.active ? 'active' : ''}`,
-            'aria-current': tab.name === this.active ? 'page' : null,
+            class: 'tab',
+            role: 'tab',
+            id: `tab-${tab.name}`,
+            'aria-controls': `view-${tab.name}`,
+            'aria-selected': String(tab.name === this.active),
+            tabindex: tab.name === this.active ? 0 : -1,
             onclick: () => this.navigate(tab.name),
+            onkeydown: (event: Event) => this.onTabKey(event as KeyboardEvent, tab.name),
           },
-          h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, tab.icon),
+          icon(tab.icon),
           h('span', {}, t(tab.label)),
-          tab.name === 'more' && suggestionCount > 0 ? h('span', { class: 'badge' }, String(suggestionCount)) : null,
+          tab.name === 'me' && suggestionCount > 0 ? h('span', { class: 'badge', 'aria-label': t('suggestionsCount', { count: suggestionCount }) }, String(suggestionCount)) : null,
         ),
       ),
     );
   }
-}
 
-/** First run: ask for the user's name and language, then create the "me" node. */
-export function runOnboarding(store: AppStore): Promise<void> {
-  const dialog = byId<HTMLDialogElement>('onboarding');
-  const browserLanguage: Language = navigator.language.startsWith('he') ? 'he' : 'en';
-  setLanguage(browserLanguage);
-  applyLanguageToDocument();
-
-  return new Promise((resolve) => {
-    const render = (): void => {
-      const name = h('input', { required: true, autocomplete: 'name' });
-      const languageSelect = h(
-        'select',
-        {},
-        h('option', { value: 'en', selected: language() === 'en' }, 'English'),
-        h('option', { value: 'he', selected: language() === 'he' }, 'עברית'),
-      );
-      languageSelect.addEventListener('change', () => {
-        setLanguage(languageSelect.value as Language);
-        applyLanguageToDocument();
-        render();
-      });
-      const form = h(
-        'form',
-        { class: 'stack' },
-        h('h2', {}, t('welcomeTitle')),
-        h('p', {}, t('welcomeBody')),
-        h('label', { class: 'field' }, h('span', {}, t('yourName')), name),
-        h('label', { class: 'field' }, h('span', {}, t('language')), languageSelect),
-        h('button', { type: 'submit', class: 'primary' }, t('start')),
-      );
-      form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        await store.createMe(name.value, language());
-        dialog.close();
-        resolve();
-      });
-      replaceChildren(dialog, form);
-    };
-    render();
-    dialog.addEventListener('cancel', (event) => event.preventDefault());
-    dialog.showModal();
-  });
+  /** Roving tabindex: arrow keys move between tabs (mirrored for right-to-left). */
+  private onTabKey(event: KeyboardEvent, current: TabName): void {
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+    const forward = (event.key === 'ArrowRight') !== (document.documentElement.dir === 'rtl');
+    const position = TABS.findIndex((tab) => tab.name === current);
+    const next = TABS[(position + (forward ? 1 : -1) + TABS.length) % TABS.length] as (typeof TABS)[number];
+    event.preventDefault();
+    this.navigate(next.name);
+    byId(`tab-${next.name}`).focus();
+  }
 }

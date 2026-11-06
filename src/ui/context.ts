@@ -1,32 +1,45 @@
 import type { Path } from '../graph/graphIndex';
 import { kinshipText } from '../i18n/kinshipText';
 import type { Person } from '../model/types';
-import type { AppStore } from '../store/appStore';
+import type { AppStore, Snapshot } from '../store/appStore';
+import type { Snap } from './components/sheet';
 
-/** What views need from the app shell. */
+/** What views and flows need from the app shell. */
 
-export type TabName = 'graph' | 'people' | 'groups' | 'connect' | 'more';
+export type TabName = 'graph' | 'people' | 'connect' | 'me';
 
-export type Highlight = { kind: 'path'; path: Path } | { kind: 'group'; groupId: string } | { kind: 'person'; personId: string };
+export type Highlight =
+  | { kind: 'path'; path: Path }
+  | { kind: 'group'; groupId: string }
+  | { kind: 'person'; personId: string };
 
 export interface AppContext {
   store: AppStore;
-  openPerson(personId: string): void;
-  showOnGraph(highlight: Highlight): void;
   navigate(tab: TabName): void;
+  openPerson(personId: string, snap?: Snap): void;
+  showOnGraph(highlight: Highlight): void;
+  /** Connect tab with both people pre-filled. */
+  showConnection(fromId: string, toId: string): void;
+  openSearch(): void;
+  openImport(welcome?: boolean): void;
+  openSuggestions(): void;
+  openCompare(mode: 'show' | 'scan'): void;
+  addPerson(): Promise<void>;
+  createGroup(): Promise<void>;
+  /** Runs a delete and offers Undo in the toast (no "are you sure?"). */
+  deleteWithUndo(message: string, run: () => Promise<Snapshot>): Promise<void>;
 }
 
 export interface View {
   element: HTMLElement;
   render(): void;
   onShow(): void;
-  setQuery(query: string): void;
 }
 
 /** "uncle", "בת דודה"… or '' when the person is not family (or is me). */
 export function relationToMeText(store: AppStore, person: Person): string {
   const kinship = store.kinshipToMe(person.id);
-  return kinship === null ? '' : kinshipText(kinship, person.gender, (id) => store.person(id).gender);
+  return kinship === null || kinship.kind === 'self' ? '' : kinshipText(kinship, person.gender, (id) => store.person(id).gender);
 }
 
 export function groupColors(store: AppStore, person: Person): string[] {

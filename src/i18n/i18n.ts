@@ -29,6 +29,20 @@ export function t(key: StringKey, params: Record<string, string | number> = {}):
   });
 }
 
+/** Keys whose count of exactly 1 needs its own wording ("1 connection", "קשר אחד"). */
+const SINGULAR: Partial<Record<StringKey, StringKey>> = {
+  connectionsCount: 'connectionsCountOne',
+  membersCount: 'membersCountOne',
+  steps: 'stepsOne',
+  compareDone: 'compareDoneOne',
+};
+
+/** Like t(), choosing the singular form when count is 1. */
+export function tCount(key: StringKey, count: number, params: Record<string, string | number> = {}): string {
+  const singular = SINGULAR[key];
+  return t(count === 1 && singular !== undefined ? singular : key, { ...params, count });
+}
+
 export function relationTypeName(type: RelationType): string {
   return t(`type_${type}`);
 }
@@ -36,7 +50,7 @@ export function relationTypeName(type: RelationType): string {
 /** How a relation reads from one side: "parent of", "child of", "Uncle", "friend". */
 export function relationLabelFrom(relation: Relation, fromPersonId: string): string {
   if (relation.type === 'parent') {
-    return relation.from === fromPersonId ? t('typeParentOf') : t('typeChildOf');
+    return relation.from === fromPersonId ? t('edgeParentOf') : t('edgeChildOf');
   }
   return relation.label !== '' ? relation.label : relationTypeName(relation.type);
 }

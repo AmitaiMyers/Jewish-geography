@@ -14,7 +14,7 @@
 | 8 | Matching across users | By normalised phone number or email, never by name. |
 | 9 | Backend | None in v1. Data lives in IndexedDB on the device. |
 | 10 | "Find connections" | Mutual connections plus the shortest chain. |
-| 11 | Login | All options: phone, Google, Apple, email. **Deferred to stage 2**, because login needs a backend and decision 9 rules one out for v1. |
+| 11 | Login | All options: phone, Google, Apple, email. **Deferred until a backend exists**, because decision 9 rules one out; stage 2 works without accounts. |
 | 12 | Third-party data | Accepted, with private-first design. |
 | 13–14 | Platforms and languages | iPhone and Android; English and Hebrew (right-to-left). |
 | 15 | Stack | Vite, TypeScript, Cytoscape.js, IndexedDB, GitHub Pages. |
@@ -39,15 +39,18 @@ Settings  { meId, language }
 - **Hashing phone numbers is not real privacy.** There are only about 10⁹ possible numbers, so anyone holding a list of hashes can recover the numbers by brute force in minutes. Hashes are fine as a matching key, but they must not be presented as anonymous.
 - **QR codes are small** (under about 2.9 KB). 500 contacts × 2 identifiers × 8-byte hashes is about 8 KB, which does not fit.
 
-### Proposed design (serverless; matches decisions 7–9)
+### Implemented design (serverless; matches decisions 7–9)
 
-1. Each phone builds a **Bloom filter** of its contacts' normalised identifiers: about 1 KB for 500 people at a 1% false-positive rate, small enough for one QR code.
-2. User A shows a QR code with A's filter. B scans it and tests each of B's own contacts against the filter. That gives the **people both know** without sending B anything.
-3. Two-way: B then shows a QR code and A scans it. The likely overlap is confirmed by tapping through a short list, which removes false positives.
-4. A's "me" node and the overlapping people are linked in both graphs. The shortest chain then works across the two users (`you → Avi → them`).
-5. Fallback for people not standing together: send the same payload as a small file through the share sheet (AirDrop, WhatsApp…).
+| Step | What happens | Code |
+|---|---|---|
+| 1 | **Build a code.** My name, my own phone/email, and a salted Bloom filter of every contact's identity key (`p:<last 9 digits>` / `e:<email>`). About 11 bits per key; the filter shrinks to fit one QR code (≤ 2000 characters), accepting more false matches for very large graphs. | `src/compare/payload.ts`, `src/compare/bloom.ts` |
+| 2 | **Hand it over.** A QR code on screen, or shared as text through the share sheet (WhatsApp, AirDrop…) — copied to the clipboard where sharing is unavailable. A received code can be pasted or opened from a .txt file. | `src/ui/compareFlow.ts` |
+| 3 | **Receive.** The camera scans it (jsQR, loaded only when needed), or the user pastes the code or opens the file. | `openScanner` |
+| 4 | **Overlap.** On the receiver's phone only: which of my contacts the filter says my friend knows, and whether my friend is already in my graph (matched by their phone or email). | `src/compare/overlap.ts` |
+| 5 | **Confirm and link.** The user unticks coincidences and chooses how they know the friend. One transaction then adds the friend if they are new, a link me ↔ friend, and a `knows` link friend ↔ each person we have in common. | `AppStore.applyComparison` |
+| 6 | **Both ways.** The friend does the same with my code. After that, shortest chains run through each other. | — |
 
-A Bloom filter only answers "is this contact in your list?" It does not reveal a list of numbers. It is still open to dictionary attacks (as is every phone-number scheme), so the UI will say "shares who you have in common". It will not claim to be anonymous.
+What the receiver learns: the sender's name and contact details (shared on purpose), and which of the receiver's *own* contacts the sender probably knows. The sender's full list is never sent, but see the caveat above: phone numbers can be tested against a filter.
 
 ### When a backend is added (global search, accounts)
 

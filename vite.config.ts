@@ -18,8 +18,8 @@ export default defineConfig({
         short_name: 'J-Geo',
         description: 'Map the people you know and discover how they are connected.',
         lang: 'en',
-        theme_color: '#1d3a6e',
-        background_color: '#f7f6f2',
+        theme_color: '#2b4c9b',
+        background_color: '#faf8f4',
         display: 'standalone',
         orientation: 'portrait',
         start_url: base,
@@ -32,6 +32,23 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
+        // The Rubik web font: cached on first use so the app keeps its look offline.
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.origin === 'https://fonts.googleapis.com',
+            handler: 'StaleWhileRevalidate',
+            options: { cacheName: 'google-fonts-stylesheets' },
+          },
+          {
+            urlPattern: ({ url }) => url.origin === 'https://fonts.gstatic.com',
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-files',
+              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
       },
     }),
   ],

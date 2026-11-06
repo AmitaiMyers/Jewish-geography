@@ -4,7 +4,7 @@
 
 export type Gender = 'male' | 'female' | 'unknown';
 
-export type PersonSource = 'manual' | 'contacts' | 'vcard' | 'whatsapp' | 'facebook' | 'self';
+export type PersonSource = 'manual' | 'contacts' | 'vcard' | 'whatsapp' | 'facebook' | 'compare' | 'self';
 
 export interface Person {
   id: string;
@@ -27,7 +27,8 @@ export interface Person {
  * The rest are social links.
  */
 export const FAMILY_PRIMITIVE_TYPES = ['parent', 'spouse', 'sibling'] as const;
-export const SOCIAL_TYPES = ['friend', 'school', 'work', 'shul', 'neighbor', 'camp', 'army'] as const;
+/** `knows` is the generic link created when comparing graphs with a friend. */
+export const SOCIAL_TYPES = ['friend', 'school', 'work', 'shul', 'neighbor', 'camp', 'army', 'knows'] as const;
 export const LABELLED_TYPES = ['relative', 'custom'] as const;
 
 export type FamilyPrimitiveType = (typeof FAMILY_PRIMITIVE_TYPES)[number];

@@ -33,6 +33,25 @@ export interface RelationDraft {
   label: string;
 }
 
+/** Everything one delete removed, so the toast's Undo can put it back exactly. */
+export interface Snapshot {
+  people: Person[];
+  relations: Relation[];
+  groups: Group[];
+  suggestions: Suggestion[];
+}
+
+const EMPTY_SNAPSHOT: Snapshot = { people: [], relations: [], groups: [], suggestions: [] };
+
+export interface Comparison {
+  /** My existing node for the friend, or null to create `newFriend`. */
+  friendId: string | null;
+  newFriend: { name: string; phones: string[]; emails: string[] };
+  relationType: RelationType;
+  label: string;
+  commonIds: string[];
+}
+
 type Listener = () => void;
 
 export class AppStore {
@@ -108,9 +127,9 @@ export class AppStore {
 
   // ---------- onboarding & settings ----------
 
-  async createMe(name: string, language: Language): Promise<void> {
+  async createMe(name: string, language: Language, phones: string[]): Promise<void> {
     assert(this.currentSettings === null, 'onboarding already done');
-    const me = this.buildPerson({ name, gender: 'unknown', phones: [], emails: [], groupIds: [], notes: '', source: 'self' });
+    const me = this.buildPerson({ name, gender: 'unknown', phones, emails: [], groupIds: [], notes: '', source: 'self' });
     const settings: Settings = { meId: me.id, language };
     const tx = this.db.transaction(['people', 'settings'], 'readwrite');
     await Promise.all([tx.objectStore('people').put(me), tx.objectStore('settings').put(settings, 'settings'), tx.done]);
@@ -144,23 +163,44 @@ export class AppStore {
     this.changed();
   }
 
-  /** Deletes people with every relation and suggestion that touches them. */
-  async deletePeople(ids: readonly string[]): Promise<void> {
+  /** Deletes people with every relation and suggestion that touches them. Returns what to restore for Undo. */
+  async deletePeople(ids: readonly string[]): Promise<Snapshot> {
     const doomed = new Set(ids);
     assert(!doomed.has(this.meId), 'you cannot delete yourself');
-    const doomedRelations = [...this.relations.values()].filter((r) => doomed.has(r.from) || doomed.has(r.to));
-    const doomedSuggestions = [...this.suggestions.values()].filter((s) => doomed.has(s.from) || doomed.has(s.to));
-
+    const snapshot: Snapshot = {
+      ...EMPTY_SNAPSHOT,
+      people: [...doomed].map((id) => this.person(id)),
+      relations: [...this.relations.values()].filter((r) => doomed.has(r.from) || doomed.has(r.to)),
+      suggestions: [...this.suggestions.values()].filter((s) => doomed.has(s.from) || doomed.has(s.to)),
+    };
     const tx = this.db.transaction(['people', 'relations', 'suggestions'], 'readwrite');
     await Promise.all([
-      ...[...doomed].map((id) => tx.objectStore('people').delete(id)),
-      ...doomedRelations.map((r) => tx.objectStore('relations').delete(r.id)),
-      ...doomedSuggestions.map((s) => tx.objectStore('suggestions').delete(s.id)),
+      ...snapshot.people.map((p) => tx.objectStore('people').delete(p.id)),
+      ...snapshot.relations.map((r) => tx.objectStore('relations').delete(r.id)),
+      ...snapshot.suggestions.map((s) => tx.objectStore('suggestions').delete(s.id)),
       tx.done,
     ]);
-    doomed.forEach((id) => this.people.delete(id));
-    doomedRelations.forEach((r) => this.relations.delete(r.id));
-    doomedSuggestions.forEach((s) => this.suggestions.delete(s.id));
+    snapshot.people.forEach((p) => this.people.delete(p.id));
+    snapshot.relations.forEach((r) => this.relations.delete(r.id));
+    snapshot.suggestions.forEach((s) => this.suggestions.delete(s.id));
+    this.changed();
+    return snapshot;
+  }
+
+  /** Puts back everything a delete removed (the Undo in the toast). */
+  async restore(snapshot: Snapshot): Promise<void> {
+    const tx = this.db.transaction(['people', 'relations', 'groups', 'suggestions'], 'readwrite');
+    await Promise.all([
+      ...snapshot.people.map((p) => tx.objectStore('people').put(p)),
+      ...snapshot.relations.map((r) => tx.objectStore('relations').put(r)),
+      ...snapshot.groups.map((g) => tx.objectStore('groups').put(g)),
+      ...snapshot.suggestions.map((s) => tx.objectStore('suggestions').put(s)),
+      tx.done,
+    ]);
+    snapshot.people.forEach((p) => this.people.set(p.id, p));
+    snapshot.relations.forEach((r) => this.relations.set(r.id, r));
+    snapshot.groups.forEach((g) => this.groups.set(g.id, g));
+    snapshot.suggestions.forEach((s) => this.suggestions.set(s.id, s));
     this.changed();
   }
 
@@ -178,11 +218,12 @@ export class AppStore {
     return relation;
   }
 
-  async deleteRelation(id: string): Promise<void> {
-    assert(this.relations.has(id), `cannot delete unknown relation ${id}`);
+  async deleteRelation(id: string): Promise<Snapshot> {
+    const relation = required(this.relations.get(id), `relation ${id}`);
     await this.db.delete('relations', id);
     this.relations.delete(id);
     this.changed();
+    return { ...EMPTY_SNAPSHOT, relations: [relation] };
   }
 
   // ---------- groups ----------
@@ -201,8 +242,8 @@ export class AppStore {
     this.changed();
   }
 
-  async deleteGroup(id: string): Promise<void> {
-    this.group(id);
+  async deleteGroup(id: string): Promise<Snapshot> {
+    const group = this.group(id);
     const members = [...this.people.values()].filter((p) => p.groupIds.includes(id));
     const updated = members.map((p) => ({ ...p, groupIds: p.groupIds.filter((g) => g !== id) }));
     const tx = this.db.transaction(['groups', 'people'], 'readwrite');
@@ -210,6 +251,7 @@ export class AppStore {
     this.groups.delete(id);
     updated.forEach((p) => this.people.set(p.id, p));
     this.changed();
+    return { ...EMPTY_SNAPSHOT, groups: [group], people: members };
   }
 
   async addPeopleToGroup(personIds: readonly string[], groupId: string): Promise<void> {
@@ -257,11 +299,49 @@ export class AppStore {
     await this.dismissSuggestion(id);
   }
 
-  async dismissSuggestion(id: string): Promise<void> {
-    assert(this.suggestions.has(id), `cannot dismiss unknown suggestion ${id}`);
+  async dismissSuggestion(id: string): Promise<Snapshot> {
+    const suggestion = required(this.suggestions.get(id), `suggestion ${id}`);
     await this.db.delete('suggestions', id);
     this.suggestions.delete(id);
     this.changed();
+    return { ...EMPTY_SNAPSHOT, suggestions: [suggestion] };
+  }
+
+  // ---------- comparing with a friend (stage 2) ----------
+
+  /**
+   * Records the result of comparing graphs: the friend (existing or new) is linked to me,
+   * and to each confirmed person we both know with a "knows" link (unless already linked).
+   * Everything is written in one transaction. Returns the friend's id.
+   */
+  async applyComparison(comparison: Comparison): Promise<string> {
+    const friend =
+      comparison.friendId !== null
+        ? this.person(comparison.friendId)
+        : this.buildPerson({ ...comparison.newFriend, gender: 'unknown', groupIds: [], notes: '', source: 'compare' });
+    comparison.commonIds.forEach((id) => this.person(id));
+
+    const isLinked = (a: string, b: string): boolean =>
+      [...this.relations.values()].some((r) => (r.from === a && r.to === b) || (r.from === b && r.to === a));
+    const drafts: RelationDraft[] = [
+      ...(isLinked(this.meId, friend.id) ? [] : [{ from: this.meId, to: friend.id, type: comparison.relationType, label: comparison.label }]),
+      ...comparison.commonIds
+        .filter((id) => id !== friend.id && !isLinked(friend.id, id))
+        .map((id): RelationDraft => ({ from: friend.id, to: id, type: 'knows', label: '' })),
+    ];
+    drafts.forEach((draft) => assert(relationProblem(draft, this.relations.values()) === null, 'comparison produced an invalid link'));
+    const relations = drafts.map((draft): Relation => ({ id: newId(), ...draft, label: draft.label.trim(), createdAt: Date.now() }));
+
+    const tx = this.db.transaction(['people', 'relations'], 'readwrite');
+    await Promise.all([
+      tx.objectStore('people').put(friend),
+      ...relations.map((r) => tx.objectStore('relations').put(r)),
+      tx.done,
+    ]);
+    this.people.set(friend.id, friend);
+    relations.forEach((r) => this.relations.set(r.id, r));
+    this.changed();
+    return friend.id;
   }
 
   // ---------- backup ----------

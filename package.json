@@ -7,17 +7,23 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run src",
+    "test:e2e": "playwright test",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "check:bundle": "node scripts/check-bundle-size.mjs",
     "icons": "node scripts/render-icons.mjs"
   },
   "dependencies": {
     "cytoscape": "^3.34.4",
     "cytoscape-fcose": "^2.2.0",
-    "idb": "^8.0.4"
+    "idb": "^8.0.4",
+    "jsqr": "^1.4.0",
+    "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.63.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.6",
     "vite-plugin-pwa": "^2.0.0",
