@@ -1,35 +1,43 @@
 import type { ElementDefinition } from 'cytoscape';
-import { isFamilyType } from '../model/types';
+import { isFamilyType, type Person } from '../model/types';
 import type { AppStore } from '../store/appStore';
-import { avatarDataUri, currentTheme } from './avatar';
+import { avatarDataUri, currentTheme, hueFor } from './avatar';
 import { groupColors } from './context';
 
 /**
  * Converts the store into Cytoscape elements.
  *
- * People are drawn as avatar images (initials + group-colour ring).
- * Invisible layout helpers keep the picture readable:
- *  - one hidden "hub" per group, tied to every member, so groups gather into clusters;
- *  - hidden "anchor" links from me to each hub and to unconnected people,
- *    so the whole picture stays one compact component around me.
+ * "Core" people (me, anyone with a link or a group) are drawn as avatar images and laid out by force.
+ * "Loose" people — imported contacts not linked to anyone yet, often the large majority — are light
+ * dots without images, placed in a cheap spiral around the core, so 1,500+ contacts stay fast.
+ * Invisible layout helpers keep the core readable: one hidden "hub" per group tied to its members
+ * (groups gather into clusters), and hidden "anchor" links from me to each hub.
  */
 
 export const hubId = (groupId: string): string => `hub:${groupId}`;
 
+export function isLoose(store: AppStore, person: Person): boolean {
+  return person.id !== store.meId && person.groupIds.length === 0 && store.index.degree(person.id) === 0;
+}
+
 export function buildGraphElements(store: AppStore): ElementDefinition[] {
   const meId = store.meId;
-  const index = store.index;
   const theme = currentTheme();
   const elements: ElementDefinition[] = [];
 
   for (const person of store.people.values()) {
-    elements.push({
-      group: 'nodes',
-      data: { id: person.id, label: person.name, avatar: avatarDataUri(person.name, groupColors(store, person), theme) },
-      classes: person.id === meId ? 'person me' : 'person',
-    });
-    if (person.id !== meId && person.groupIds.length === 0 && index.degree(person.id) === 0) {
-      elements.push(layoutEdge(`anchor:${person.id}`, meId, person.id, 'anchor'));
+    if (isLoose(store, person)) {
+      elements.push({
+        group: 'nodes',
+        data: { id: person.id, label: person.name, color: `hsl(${hueFor(person.name)} 45% 60%)` },
+        classes: 'person loose',
+      });
+    } else {
+      elements.push({
+        group: 'nodes',
+        data: { id: person.id, label: person.name, avatar: avatarDataUri(person.name, groupColors(store, person), theme) },
+        classes: person.id === meId ? 'person core me' : 'person core',
+      });
     }
   }
 

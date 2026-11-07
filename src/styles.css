@@ -1170,6 +1170,11 @@ dialog.sheet[data-snap='peek']::backdrop {
 }
 
 .graph-empty .empty {
+  margin: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-bg) 88%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   pointer-events: auto;
 }
 

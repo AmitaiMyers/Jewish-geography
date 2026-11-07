@@ -19,11 +19,17 @@ export async function onboard(page: Page, name: string, phone: string, language:
   await expect(welcome).toBeHidden();
 }
 
+/** A generated .vcf (synthetic people only — never real contacts in tests). */
+export function vcfFile(names: string[]): { name: string; mimeType: string; buffer: Buffer } {
+  const cards = names.map((name, i) => `BEGIN:VCARD\nVERSION:3.0\nFN:${name}\nTEL:050-${String(1000000 + i)}\nEND:VCARD`);
+  return { name: 'generated.vcf', mimeType: 'text/vcard', buffer: Buffer.from(cards.join('\n'), 'utf8') };
+}
+
 /** From the "Bring in your people" / import sheet: pick a .vcf and import everything new. */
-export async function importVcf(page: Page, file: string, groupName = ''): Promise<void> {
+export async function importVcf(page: Page, file: string | ReturnType<typeof vcfFile>, groupName = ''): Promise<void> {
   const chooser = page.waitForEvent('filechooser');
   await openSheet(page).getByRole('button', { name: /Contacts file|קובץ אנשי קשר/ }).click();
-  await (await chooser).setFiles(fixture(file));
+  await (await chooser).setFiles(typeof file === 'string' ? fixture(file) : file);
   const review = openSheet(page);
   await expect(review.getByRole('heading', { name: /Who should come in|מי נכנס/ })).toBeVisible();
   if (groupName !== '') {

@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { goToTab, importVcf, onboard, openSheet } from './helpers';
+import { goToTab, importVcf, onboard, openSheet, vcfFile } from './helpers';
 
 test.describe('first-run journey', () => {
   test('onboard, import, review suggestions, infer family, find a chain', async ({ page }) => {
@@ -119,4 +119,34 @@ test('no serious accessibility violations on the main screens', async ({ page })
   await goToTab(page, /People/);
   await page.locator('#view-people li', { hasText: 'Sarah Cohen' }).getByRole('button').click();
   await expectAccessible(page, 'person sheet');
+});
+
+test('1,500 contacts: import stays fast, cards advance, the graph appears', async ({ page }) => {
+  test.setTimeout(120_000);
+  const names = [...Array.from({ length: 1500 }, (_, i) => `Person ${i}`), 'שאול כהן', 'אמא שאול', 'Mom'];
+  await onboard(page, 'Amitai', '054-999-0000');
+  const started = Date.now();
+  await importVcf(page, vcfFile(names));
+  await expect(page.locator('#toast')).toContainText('Added 1503 people', { timeout: 20_000 });
+  expect(Date.now() - started).toBeLessThan(20_000);
+
+  // Unconnected people are hidden behind a chip; the empty state points to the found family links.
+  await expect(page.getByRole('heading', { name: '1503 people, no connections yet' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show 1503 not connected yet' }).first()).toBeVisible();
+
+  await page.locator('#toast').getByRole('button', { name: 'Review' }).click();
+  const cards = openSheet(page);
+  await expect(cards.getByText('1 of 2')).toBeVisible();
+  await cards.getByRole('button', { name: 'Accept', exact: true }).click();
+  await expect(cards.getByText('2 of 2')).toBeVisible({ timeout: 5_000 });
+  await cards.getByRole('button', { name: 'Accept', exact: true }).click();
+  await expect(cards.getByRole('heading', { name: 'All reviewed!' })).toBeVisible({ timeout: 5_000 });
+  await cards.getByRole('button', { name: 'Done' }).click();
+
+  // "אמא שאול" became Shaul's mother, not mine.
+  await goToTab(page, /People/);
+  await page.locator('#view-people').getByRole('searchbox').fill('אמא שאול');
+  await page.locator('#view-people li', { hasText: 'אמא שאול' }).getByRole('button').click();
+  await expect(openSheet(page).locator('.tag', { hasText: 'parent of' })).toBeVisible();
+  await expect(openSheet(page).locator('.list-row', { hasText: 'שאול כהן' })).toBeVisible();
 });

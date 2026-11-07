@@ -121,10 +121,21 @@ function withoutParentheses(text: string): string {
   return text.replace(/\(.*?\)/g, ' ').trim();
 }
 
-/** Tries the first two words, then the first word ("בת דודה רחל", "Uncle Moshe"). */
-function leadingWord(text: string): Found | null {
+/** Emoji and punctuation around a referenced name ("רז😉") would stop it matching a contact. */
+function cleanAnchor(text: string): string {
+  return text.replace(/[^\p{L}\p{N}\s'"׳״-]/gu, '').replace(/\s+/g, ' ').trim();
+}
+
+/** Tries the first two words, then the first word ("בת דודה רחל", "Uncle Moshe"); also returns the words after it. */
+function leadingWord(text: string): { found: Found; rest: string } | null {
   const words = text.split(/\s+/);
-  return lookup(words.slice(0, 2).join(' ')) ?? lookup(words[0] ?? '');
+  for (const size of [2, 1]) {
+    const found = lookup(words.slice(0, size).join(' '));
+    if (found !== null) {
+      return { found, rest: words.slice(size).join(' ') };
+    }
+  }
+  return null;
 }
 
 /** Tries the last two words, then the last word ("משה אבא" → "אבא"). */
@@ -139,14 +150,14 @@ function hintAboutSomeoneElse(segment: string): NameHint | null {
   if (possessive !== null) {
     const found = lookup(possessive[2] as string);
     if (found !== null) {
-      return { ...found, anchorName: (possessive[1] as string).trim() };
+      return { ...found, anchorName: cleanAnchor(possessive[1] as string) };
     }
   }
   const ofPhrase = OF_PHRASE.exec(segment);
   if (ofPhrase !== null) {
     const found = trailingWord(ofPhrase[1] as string);
     if (found !== null) {
-      return { ...found, anchorName: (ofPhrase[2] as string).trim() };
+      return { ...found, anchorName: cleanAnchor(ofPhrase[2] as string) };
     }
   }
   return null;
@@ -166,21 +177,33 @@ export function parseNameHints(name: string): NameHint[] {
     }
   }
   const leading = leadingWord(withoutParentheses(name));
-  return leading === null ? [] : [{ ...leading, anchorName: null }];
+  if (leading === null) {
+    return [];
+  }
+  // "אמא שאול" / "Mom Sarah" is someone else's parent (your own is just "אמא" / "Mom"),
+  // whereas "דודה רחל" / "Uncle Moshe" is your relative called Rachel / Moshe.
+  const rest = cleanAnchor(leading.rest);
+  const isSomeoneElsesParent = leading.found.entry.kind === 'parentOfAnchor' && rest !== '';
+  return [{ ...leading.found, anchorName: isSomeoneElsesParent ? rest : null }];
 }
 
-/** Finds the one person a short name refers to; ambiguous or unknown names give null. */
+/**
+ * Finds the one person a short name refers to; ambiguous or unknown names give null.
+ * A one-word name ("רז") is only trusted when nobody else shares that first name —
+ * with fifteen people called Raz, a contact named just "רז" is not necessarily the one meant.
+ */
 export function findPersonByName(name: string, people: readonly Person[], excludeId: string): Person | null {
   const wanted = normalizeName(name);
   const candidates = people.filter((person) => person.id !== excludeId);
   const exact = candidates.filter((person) => normalizeName(person.name) === wanted);
-  if (exact.length === 1) {
+  const byFirstName = candidates.filter((person) => normalizeName(person.name).split(' ')[0] === wanted);
+  const isSingleWord = !wanted.includes(' ');
+  if (exact.length === 1 && (!isSingleWord || byFirstName.length === 1)) {
     return exact[0] as Person;
   }
   if (exact.length > 1) {
     return null;
   }
-  const byFirstName = candidates.filter((person) => normalizeName(person.name).split(' ')[0] === wanted);
   return byFirstName.length === 1 ? (byFirstName[0] as Person) : null;
 }
 

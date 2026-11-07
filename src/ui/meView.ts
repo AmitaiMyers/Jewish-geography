@@ -42,7 +42,7 @@ export class MeView implements View {
       h(
         'div',
         { class: 'grow stack', style: 'gap:4px' },
-        h('h2', { class: 'ellipsis' }, bdi(me.name)),
+        h('h2', { style: 'overflow-wrap:anywhere' }, bdi(me.name)),
         h(
           'p',
           { class: 'muted nums' },

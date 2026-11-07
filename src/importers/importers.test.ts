@@ -89,6 +89,10 @@ describe('parseNameHints', () => {
     ['Rivka (Sarah’s mom)', 'mom', 'Sarah'],
     ['Yossi dad of Avi Levi', 'dad', 'Avi Levi'],
     ['משה אבא של שרה', 'אבא', 'שרה'],
+    ['אמא שאול', 'אמא', 'שאול'],
+    ['אמא של רז😉', 'אמא', 'רז'],
+    ['עינב קוטלר אמא של פטל', 'אמא', 'פטל'],
+    ['סבתא', 'סבתא', null],
   ])('%s', (name, word, anchor) => {
     const [hint] = parseNameHints(name);
     expect(hint?.word).toBe(word);
@@ -108,6 +112,14 @@ describe('suggestionsFromName', () => {
     expect(suggestion).toMatchObject({ from: 'rivka', to: 'sarah', type: 'parent', genderHint: 'female' });
   });
 
+  it('reads "אמא שאול" as Shaul\'s mother, and drops it when there is no Shaul', () => {
+    const shaul = person('shaul', 'שאול כהן');
+    const shaulsMom = person('mom', 'אמא שאול');
+    expect(suggestionsFromName(shaulsMom, [...people, shaul, shaulsMom], 'me')[0]).toMatchObject({ from: 'mom', to: 'shaul', type: 'parent' });
+    const placeMom = person('m2', 'אמא אפיקים בנגב');
+    expect(suggestionsFromName(placeMom, [...people, placeMom], 'me')).toEqual([]);
+  });
+
   it('links to me when no one else is named', () => {
     const son = person('kid', 'Son');
     expect(suggestionsFromName(son, [...people, son], 'me')[0]).toMatchObject({ from: 'me', to: 'kid', type: 'parent' });
@@ -116,6 +128,12 @@ describe('suggestionsFromName', () => {
   it('labels free-form relatives', () => {
     const uncle = person('u', 'Uncle Moshe');
     expect(suggestionsFromName(uncle, [...people, uncle], 'me')[0]).toMatchObject({ type: 'relative', label: 'Uncle' });
+  });
+
+  it('does not trust a one-word contact name when others share that first name', () => {
+    const many = [person('raz', 'רז'), person('raz2', 'רז לוי'), person('raz3', 'רז כהן')];
+    expect(findPersonByName('רז', many, 'x')).toBeNull();
+    expect(findPersonByName('רז', [person('raz', 'רז')], 'x')?.id).toBe('raz');
   });
 
   it('skips ambiguous names', () => {

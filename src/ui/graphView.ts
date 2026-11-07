@@ -5,7 +5,7 @@ import { t } from '../i18n/i18n';
 import { assert } from '../model/assert';
 import { relationToMeText, type AppContext, type Highlight, type View } from './context';
 import { h, replaceChildren } from './dom';
-import { buildGraphElements } from './graphElements';
+import { buildGraphElements, isLoose } from './graphElements';
 import { icon, networkIllustration } from './icons';
 import { DURATION, duration, haptic, prefersReducedMotion } from './motion';
 
@@ -15,19 +15,23 @@ const DARK_SCHEME = window.matchMedia('(prefers-color-scheme: dark)');
 const COACH_KEY = 'jg.coach.tapPerson';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PATH_STAGGER_MS = 60;
+/** Above this many connected people the layout switches to its faster "draft" mode without animation. */
+const LARGE_CORE = 250;
+const MIN_CORE_TO_FOCUS = 4;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+const SPIRAL_SPACING = 16;
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-function stylesheet(): StylesheetJson {
+/** @param showLoose draw people who are not connected to anyone yet (off by default: they can number in the thousands) */
+function stylesheet(showLoose: boolean): StylesheetJson {
   const accent = cssVar('--color-accent');
   return [
     {
       selector: 'node.person',
       style: {
-        'background-image': 'data(avatar)',
-        'background-fit': 'cover',
         'background-opacity': 0,
         'border-width': 0,
         width: 36,
@@ -54,8 +58,24 @@ function stylesheet(): StylesheetJson {
         'transition-duration': duration(DURATION.base),
       },
     },
+    { selector: 'node.core', style: { 'background-image': 'data(avatar)', 'background-fit': 'cover' } },
+    {
+      selector: 'node.loose',
+      style: {
+        display: showLoose ? 'element' : 'none',
+        width: 12,
+        height: 12,
+        'background-color': 'data(color)',
+        'background-opacity': 0.75,
+        'font-size': 7,
+        'min-zoomed-font-size': 10,
+        'text-margin-y': 2,
+        'text-background-opacity': 0,
+      },
+    },
+    { selector: 'node.loose.hover', style: { width: 16, height: 16 } },
     { selector: 'node.me', style: { width: 50, height: 50, 'font-size': 12, 'font-weight': 700, 'underlay-opacity': 0.18, 'underlay-padding': 5 } },
-    { selector: 'node.person.hover', style: { width: 41, height: 41 } },
+    { selector: 'node.core.hover', style: { width: 41, height: 41 } },
     { selector: 'node.me.hover', style: { width: 57, height: 57 } },
     { selector: 'node.hub', style: { width: 1, height: 1, opacity: 0, events: 'no', label: '' } },
     { selector: 'edge.layout', style: { opacity: 0, events: 'no', width: 0 } },
@@ -103,6 +123,7 @@ export class GraphView implements View {
   private hasLaidOut = false;
   private highlight: Highlight | null = null;
   private fabOpen = false;
+  private showLoose = false;
   private haloShown = false;
   private hullFrame = 0;
   private staggerTimers: number[] = [];
@@ -132,7 +153,7 @@ export class GraphView implements View {
     });
     DARK_SCHEME.addEventListener('change', () => {
       if (this.cyInstance !== null) {
-        this.cyInstance.style(stylesheet());
+        this.cyInstance.style(stylesheet(this.showLoose));
         this.render();
       }
     });
@@ -142,7 +163,15 @@ export class GraphView implements View {
   private get cy(): Core {
     if (this.cyInstance === null) {
       assert(this.element.isConnected, 'graph view must be attached to the page before rendering');
-      const cy = cytoscape({ container: this.canvas, style: stylesheet(), minZoom: 0.05, maxZoom: 2, boxSelectionEnabled: false });
+      const cy = cytoscape({
+        container: this.canvas,
+        style: stylesheet(this.showLoose),
+        minZoom: 0.05,
+        maxZoom: 2,
+        boxSelectionEnabled: false,
+        // 3× phone screens would draw 9× the pixels; 2× is visually identical for this graph and far cheaper.
+        pixelRatio: Math.min(window.devicePixelRatio, 2),
+      });
       cy.on('tap', 'node.person', (event) => {
         const id = (event.target as NodeSingular).id();
         haptic();
@@ -234,38 +263,87 @@ export class GraphView implements View {
           cy.add(definition.group === 'nodes' ? { ...definition, position } : definition);
           structureChanged = true;
         } else {
-          existing.data(definition.data);
+          // Only touch what changed: rewriting data marks the node dirty and Cytoscape restyles it.
+          const changed = Object.entries(definition.data).some(([key, value]) => existing.data(key) !== value);
+          if (changed) existing.data(definition.data);
+          const classes = String(definition.classes);
+          if (existing.hasClass('loose') !== classes.includes('loose')) {
+            existing.classes(classes); // became connected (or lost its last link): it moves between spiral and core
+            structureChanged = true;
+          }
         }
       }
     });
     this.layoutNeeded ||= structureChanged;
   }
 
+  /**
+   * Force layout (fcose) runs on the connected core only — its cost grows with the square of the node count.
+   * Loose people then go into a sunflower spiral around the core in linear time.
+   */
   private runLayout(force: boolean): void {
     if (!force && !this.layoutNeeded) {
       return;
     }
     this.layoutNeeded = false;
+    const cy = this.cy;
     const firstTime = !this.hasLaidOut;
     this.hasLaidOut = true;
-    this.cy
-      .layout({
-        name: 'fcose',
-        quality: 'default',
-        randomize: firstTime || force,
-        animate: !firstTime && !prefersReducedMotion(),
-        animationDuration: DURATION.slow,
-        animationEasing: 'ease-out',
-        fit: true,
-        padding: 48,
-        packComponents: false,
-        nodeDimensionsIncludeLabels: false,
-        idealEdgeLength: (edge: EdgeSingular) => (edge.hasClass('anchor') ? 170 : edge.hasClass('member') ? 45 : 85),
-        edgeElasticity: (edge: EdgeSingular) => (edge.hasClass('member') ? 0.8 : 0.45),
-        nodeRepulsion: (node: NodeSingular) => (node.hasClass('hub') ? 800 : 7000),
-        numIter: 2500,
-      } as cytoscape.LayoutOptions)
-      .run();
+    const core = cy.elements().difference(cy.nodes('.loose'));
+    const large = core.nodes('.person').length > LARGE_CORE;
+    const layout = core.layout({
+      name: 'fcose',
+      quality: large ? 'draft' : 'default',
+      randomize: firstTime || force,
+      animate: !firstTime && !large && !prefersReducedMotion(),
+      animationDuration: DURATION.slow,
+      animationEasing: 'ease-out',
+      fit: false,
+      packComponents: false,
+      nodeDimensionsIncludeLabels: false,
+      idealEdgeLength: (edge: EdgeSingular) => (edge.hasClass('anchor') ? 170 : edge.hasClass('member') ? 45 : 85),
+      edgeElasticity: (edge: EdgeSingular) => (edge.hasClass('member') ? 0.8 : 0.45),
+      nodeRepulsion: (node: NodeSingular) => (node.hasClass('hub') ? 800 : 7000),
+      numIter: large ? 1000 : 2500,
+    } as cytoscape.LayoutOptions);
+    void layout.promiseOn('layoutstop').then(() => {
+      this.placeLooseNodes();
+      if (firstTime || force) {
+        this.fitStart();
+      } else if (this.highlight === null && !this.isInView(this.cy.nodes('.core'))) {
+        // The connected part grew past the screen (e.g. right after accepting suggestions): bring it back into view.
+        this.cy.animate({ fit: { eles: this.cy.nodes('.core'), padding: 48 }, duration: duration(DURATION.slow), easing: 'ease-out' });
+      }
+    });
+    layout.run();
+  }
+
+  /** Golden-angle spiral: evenly spaced dots, deterministic order (by name), O(n). */
+  private placeLooseNodes(): void {
+    const cy = this.cy;
+    const loose = cy.nodes('.loose').sort((a, b) => String(a.data('label')).localeCompare(String(b.data('label'))));
+    if (loose.empty()) return;
+    const box = cy.nodes('.core').boundingBox();
+    const centerX = (box.x1 + box.x2) / 2;
+    const centerY = (box.y1 + box.y2) / 2;
+    const innerRadius = Math.max(box.w, box.h) / 2 + 70;
+    loose.positions((_node, i) => {
+      const radius = innerRadius + SPIRAL_SPACING * Math.sqrt(i);
+      const angle = i * GOLDEN_ANGLE;
+      return { x: centerX + radius * Math.cos(angle), y: centerY + radius * Math.sin(angle) };
+    });
+  }
+
+  private isInView(elements: NodeCollection): boolean {
+    const view = this.cy.extent();
+    const box = elements.boundingBox();
+    return box.x1 >= view.x1 && box.x2 <= view.x2 && box.y1 >= view.y1 && box.y2 <= view.y2;
+  }
+
+  /** Opens on the connected people (the interesting part); with almost no one connected, shows everyone. */
+  private fitStart(): void {
+    const core = this.cy.nodes('.core');
+    this.cy.fit(core.length >= MIN_CORE_TO_FOCUS || !this.showLoose ? core : this.cy.nodes('.person'), 48);
   }
 
   // ---------- chrome ----------
@@ -276,8 +354,12 @@ export class GraphView implements View {
     const groups = [...store.groups.values()].filter((group) => [...store.people.values()].some((p) => p.groupIds.includes(group.id)));
     const chip = (content: (Node | string)[], pressed: boolean, onclick: () => void): HTMLElement =>
       h('button', { class: 'chip', 'aria-pressed': String(pressed), onclick }, ...content);
+    const looseCount = [...store.people.values()].filter((person) => isLoose(store, person)).length;
     replaceChildren(
       this.chips,
+      looseCount === 0
+        ? null
+        : chip([this.showLoose ? t('hideLoose') : t('showLoose', { count: looseCount })], this.showLoose, () => this.setShowLoose(!this.showLoose)),
       ...(groups.length === 0
         ? []
         : [
@@ -291,6 +373,15 @@ export class GraphView implements View {
             ),
           ]),
     );
+  }
+
+  private setShowLoose(show: boolean): void {
+    this.showLoose = show;
+    this.cy.style(stylesheet(show));
+    this.renderChips();
+    this.renderEmpty();
+    const visible = this.cy.nodes(show ? '.person' : '.core');
+    this.cy.animate({ fit: { eles: visible, padding: 48 }, duration: duration(DURATION.slow), easing: 'ease-out' });
   }
 
   private renderTools(): void {
@@ -354,26 +445,40 @@ export class GraphView implements View {
     this.renderFab();
   }
 
+  /**
+   * Two empty states: nobody at all yet, or many people but none connected
+   * (typical right after a big import) — each with the one next step that helps.
+   */
   private renderEmpty(): void {
-    const isEmpty = this.ctx.store.people.size <= 1;
-    this.emptyLayer.hidden = !isEmpty;
+    const store = this.ctx.store;
+    const others = store.people.size - 1;
+    const noOne = others === 0;
+    const noneConnected =
+      !noOne && !this.showLoose && [...store.people.values()].every((person) => person.id === store.meId || isLoose(store, person));
+    this.emptyLayer.hidden = !noOne && !noneConnected;
+    const actions = noOne
+      ? [
+          h('button', { class: 'btn btn-primary', onclick: () => this.ctx.openImport() }, t('importContacts')),
+          h('button', { class: 'btn', onclick: () => void this.ctx.addPerson() }, t('addPerson')),
+        ]
+      : [
+          store.suggestions.size > 0
+            ? h('button', { class: 'btn btn-primary', onclick: () => this.ctx.openSuggestions() }, t('suggestionsCount', { count: store.suggestions.size }))
+            : null,
+          h('button', { class: 'btn', onclick: () => this.setShowLoose(true) }, t('showLoose', { count: others })),
+        ];
     replaceChildren(
       this.emptyLayer,
-      isEmpty
-        ? h(
+      this.emptyLayer.hidden
+        ? null
+        : h(
             'div',
             { class: 'empty' },
             networkIllustration(),
-            h('h2', {}, t('emptyGraphTitle')),
-            h('p', {}, t('emptyGraphBody')),
-            h(
-              'div',
-              { class: 'row' },
-              h('button', { class: 'btn btn-primary', onclick: () => this.ctx.openImport() }, t('importContacts')),
-              h('button', { class: 'btn', onclick: () => void this.ctx.addPerson() }, t('addPerson')),
-            ),
-          )
-        : null,
+            h('h2', {}, noOne ? t('emptyGraphTitle') : t('noneConnectedTitle', { count: others })),
+            h('p', {}, noOne ? t('emptyGraphBody') : t('noneConnectedBody')),
+            h('div', { class: 'row', style: 'justify-content:center' }, ...actions),
+          ),
     );
   }
 
@@ -447,7 +552,7 @@ export class GraphView implements View {
   // ---------- highlight, hull, camera ----------
 
   private fitAll(): void {
-    this.cy.animate({ fit: { eles: this.cy.nodes('.person'), padding: 48 }, duration: duration(DURATION.slow), easing: 'ease-out' });
+    this.cy.animate({ fit: { eles: this.cy.nodes(this.showLoose ? '.person' : '.core'), padding: 48 }, duration: duration(DURATION.slow), easing: 'ease-out' });
   }
 
   private groupMembers(groupId: string): NodeCollection {
@@ -459,7 +564,7 @@ export class GraphView implements View {
     const cy = this.cy;
     this.staggerTimers.forEach((timer) => window.clearTimeout(timer));
     this.staggerTimers = [];
-    cy.elements().removeClass('faded highlight');
+    cy.elements('.faded, .highlight').removeClass('faded highlight');
 
     const highlight = this.highlight;
     let focus: Collection = cy.collection();

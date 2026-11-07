@@ -9,6 +9,9 @@ import { haptic } from './motion';
 
 type SortOrder = 'name' | 'connections' | 'recent';
 
+const FIRST_ROWS = 60;
+const ROWS_PER_FRAME = 200;
+
 /** Everyone, searchable and sortable, with multi-select for bulk grouping and deleting. */
 export class PeopleView implements View {
   readonly element: HTMLElement;
@@ -22,6 +25,7 @@ export class PeopleView implements View {
   private order: SortOrder = 'name';
   private selecting = false;
   private readonly selected = new Set<string>();
+  private renderToken = 0;
 
   constructor(private readonly ctx: AppContext) {
     this.filter.addEventListener('input', () => this.renderList());
@@ -98,9 +102,24 @@ export class PeopleView implements View {
     } else if (people.length === 0) {
       replaceChildren(this.list, h('li', { class: 'empty' }, h('p', {}, t('noMatches', { query: this.filter.value }))));
     } else {
-      replaceChildren(this.list, ...people.map((person) => this.row(person)));
+      this.renderRows(people);
     }
     this.renderSelectionBar(people);
+  }
+
+  /**
+   * First rows immediately, the rest in animation-frame chunks, so a 1,500-person list never
+   * blocks a tab switch. A newer render cancels an older one still streaming in.
+   */
+  private renderRows(people: Person[]): void {
+    const token = ++this.renderToken;
+    replaceChildren(this.list, ...people.slice(0, FIRST_ROWS).map((person) => this.row(person)));
+    const appendFrom = (start: number): void => {
+      if (token !== this.renderToken || start >= people.length) return;
+      this.list.append(...people.slice(start, start + ROWS_PER_FRAME).map((person) => this.row(person)));
+      window.requestAnimationFrame(() => appendFrom(start + ROWS_PER_FRAME));
+    };
+    window.requestAnimationFrame(() => appendFrom(FIRST_ROWS));
   }
 
   private row(person: Person): HTMLElement {

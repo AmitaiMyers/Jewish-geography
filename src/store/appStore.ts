@@ -287,16 +287,28 @@ export class AppStore {
     return { added: added.length, suggested: fresh.length };
   }
 
+  /** Applies the gender hint, adds the link and removes the suggestion — one transaction, one re-render. */
   async acceptSuggestion(id: string): Promise<void> {
     const suggestion = required(this.suggestions.get(id), `suggestion ${id}`);
     const subject = this.person(suggestion.subjectId);
-    if (subject.gender === 'unknown' && suggestion.genderHint !== 'unknown') {
-      await this.updatePerson({ ...subject, gender: suggestion.genderHint });
-    }
-    if (relationProblem(suggestion, this.relations.values()) === null) {
-      await this.addRelation(suggestion);
-    }
-    await this.dismissSuggestion(id);
+    const updatedSubject =
+      subject.gender === 'unknown' && suggestion.genderHint !== 'unknown' ? { ...subject, gender: suggestion.genderHint } : null;
+    const relation: Relation | null =
+      relationProblem(suggestion, this.relations.values()) === null
+        ? { id: newId(), from: suggestion.from, to: suggestion.to, type: suggestion.type, label: suggestion.label.trim(), createdAt: Date.now() }
+        : null;
+
+    const tx = this.db.transaction(['people', 'relations', 'suggestions'], 'readwrite');
+    await Promise.all([
+      updatedSubject === null ? Promise.resolve() : tx.objectStore('people').put(updatedSubject),
+      relation === null ? Promise.resolve() : tx.objectStore('relations').put(relation),
+      tx.objectStore('suggestions').delete(id),
+      tx.done,
+    ]);
+    if (updatedSubject !== null) this.people.set(updatedSubject.id, updatedSubject);
+    if (relation !== null) this.relations.set(relation.id, relation);
+    this.suggestions.delete(id);
+    this.changed();
   }
 
   async dismissSuggestion(id: string): Promise<Snapshot> {
