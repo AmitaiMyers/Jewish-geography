@@ -35,6 +35,8 @@ const SINGULAR: Partial<Record<StringKey, StringKey>> = {
   membersCount: 'membersCountOne',
   steps: 'stepsOne',
   compareDone: 'compareDoneOne',
+  importGroups: 'importGroupsOne',
+  importSuggestions: 'importSuggestionsOne',
 };
 
 /** Like t(), choosing the singular form when count is 1. */

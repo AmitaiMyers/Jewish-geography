@@ -71,7 +71,24 @@ export interface Suggestion {
   genderHint: Gender;
   /** The text that produced the suggestion, shown to the user as the reason. */
   evidence: string;
+  /**
+   * Set when the named person is ambiguous ("אמא של רז" with fifteen Raz) or missing ("אמא של יושו").
+   * The endpoint on `side` is '' until the user picks a candidate (or a new person) on the card.
+   */
+  unresolved: UnresolvedEndpoint | null;
 }
+
+export interface UnresolvedEndpoint {
+  side: 'from' | 'to';
+  /** The name as written in the contact ("רז"). */
+  name: string;
+  candidateIds: string[];
+  /** Parent/child hints may add the missing person ("יושו") as a new node. */
+  canCreate: boolean;
+}
+
+/** How the user resolved an unresolved suggestion. */
+export type EndpointChoice = { personId: string } | { newPersonName: string };
 
 export interface Settings {
   meId: string;

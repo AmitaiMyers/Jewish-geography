@@ -1,4 +1,4 @@
-import { t } from '../i18n/i18n';
+import { t, tCount } from '../i18n/i18n';
 import { isContactPickerSupported, pickPhoneContacts } from '../importers/contactPicker';
 import { parseFacebookFriends } from '../importers/facebook';
 import type { RawContact } from '../importers/rawContact';
@@ -117,17 +117,20 @@ export function openImportReview(ctx: AppContext, contacts: RawContact[], source
           ? null
           : groupSelect.value;
     const picked = candidates.filter((c) => chosen.has(c)).map((c) => c.contact);
-    const result = await store.importContacts(picked, source, groupId);
+    const result = await store.importContacts(picked, source, { groupId, servicesGroupName: t('servicesGroup') });
     await sheet.close();
     haptic([10, 40, 10]);
-    if (result.suggested > 0) {
-      toast(t('importDoneWithSuggestions', { added: result.added, suggested: result.suggested }), {
-        success: true,
-        action: { label: t('review'), run: () => ctx.openSuggestions() },
-      });
-    } else {
-      toast(t('importDone', { added: result.added }), { success: true });
-    }
+    const message = [
+      t('importDone', { added: result.added }),
+      result.groups > 0 ? tCount('importGroups', result.groups) : '',
+      result.suggested > 0 ? tCount('importSuggestions', result.suggested) : '',
+    ]
+      .filter((part) => part !== '')
+      .join(' ');
+    toast(message, {
+      success: true,
+      action: result.suggested > 0 ? { label: t('review'), run: () => ctx.openSuggestions() } : undefined,
+    });
     ctx.navigate('graph');
   });
 

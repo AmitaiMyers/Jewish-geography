@@ -24,17 +24,18 @@ export function hueFor(name: string): number {
   return Math.abs(hash) % 360;
 }
 
-type Theme = 'light' | 'dark';
+export type Theme = 'light' | 'dark';
 
 export function currentTheme(): Theme {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-function colors(name: string, theme: Theme): { background: string; foreground: string } {
+/** Comma syntax on purpose: Cytoscape cannot parse the newer space-separated hsl(). */
+export function avatarColors(name: string, theme: Theme): { background: string; foreground: string } {
   const hue = hueFor(name);
   return theme === 'dark'
-    ? { background: `hsl(${hue} 32% 30%)`, foreground: `hsl(${hue} 70% 88%)` }
-    : { background: `hsl(${hue} 60% 90%)`, foreground: `hsl(${hue} 45% 26%)` };
+    ? { background: `hsl(${hue}, 32%, 30%)`, foreground: `hsl(${hue}, 70%, 88%)` }
+    : { background: `hsl(${hue}, 60%, 90%)`, foreground: `hsl(${hue}, 45%, 26%)` };
 }
 
 function ringGradient(ringColors: readonly string[]): string {
@@ -46,7 +47,7 @@ function ringGradient(ringColors: readonly string[]): string {
 export type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
 
 export function avatar(name: string, ringColors: readonly string[], size: AvatarSize = 'md', isMe = false): HTMLElement {
-  const { background, foreground } = colors(name, currentTheme());
+  const { background, foreground } = avatarColors(name, currentTheme());
   const element = h('span', { class: `avatar avatar-${size}${isMe ? ' is-me' : ''}`, 'aria-hidden': 'true' }, initials(name));
   element.style.setProperty('--avatar-bg', background);
   element.style.setProperty('--avatar-fg', foreground);
@@ -70,7 +71,7 @@ export function avatarDataUri(name: string, ringColors: readonly string[], theme
   if (cached !== undefined) {
     return cached;
   }
-  const { background, foreground } = colors(name, theme);
+  const { background, foreground } = avatarColors(name, theme);
   const radius = 45;
   const circumference = 2 * Math.PI * radius;
   const segment = ringColors.length === 0 ? 0 : circumference / ringColors.length;

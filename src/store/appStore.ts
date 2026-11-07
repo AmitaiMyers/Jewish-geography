@@ -1,12 +1,13 @@
 import type { IDBPDatabase } from 'idb';
 import { GraphIndex } from '../graph/graphIndex';
 import { classifyWalk, familyWalksFrom, type Kinship } from '../graph/kinship';
-import { suggestionsFromName } from '../importers/nameHints';
+import { jointSuggestions, splitJointContact, suggestionsFromName } from '../importers/nameHints';
 import type { RawContact } from '../importers/rawContact';
 import { assert, newId, required } from '../model/assert';
 import { nextGroupColor } from '../model/groupColors';
+import { planNameGroups } from '../model/nameGroups';
 import { relationProblem } from '../model/relationRules';
-import type { Gender, Group, Language, Person, PersonSource, Relation, RelationType, Settings, Suggestion } from '../model/types';
+import type { EndpointChoice, Gender, Group, Language, Person, PersonSource, Relation, RelationType, Settings, Suggestion } from '../model/types';
 import { DATA_STORES, openDatabase, type GeographyDB } from './db';
 import { parseBackup, type Backup } from './backup';
 
@@ -52,7 +53,25 @@ export interface Comparison {
   commonIds: string[];
 }
 
+export interface ImportOptions {
+  /** Put everyone imported into this group (or null). */
+  groupId: string | null;
+  /** Name for the group of service contacts (taxis, deliveries…), in the user's language. */
+  servicesGroupName: string;
+}
+
+export interface ImportResult {
+  added: number;
+  suggested: number;
+  groups: number;
+}
+
 type Listener = () => void;
+
+/** Suggestions saved before ambiguous names were supported have no `unresolved` field: they were all resolved. */
+function withUnresolvedField(suggestion: Suggestion): Suggestion {
+  return 'unresolved' in suggestion ? suggestion : { ...(suggestion as Omit<Suggestion, 'unresolved'>), unresolved: null };
+}
 
 export class AppStore {
   readonly people = new Map<string, Person>();
@@ -266,45 +285,134 @@ export class AppStore {
 
   // ---------- import & suggestions ----------
 
-  /** Adds contacts as people, optionally into a group, then proposes links from their names. */
-  async importContacts(contacts: readonly RawContact[], source: PersonSource, groupId: string | null): Promise<{ added: number; suggested: number }> {
-    if (groupId !== null) {
-      this.group(groupId);
+  /**
+   * Adds contacts as people and, in one transaction:
+   *  - splits two-person contacts ("פני וגרי סבא וסבתא") into two linked people,
+   *  - proposes links from names (ambiguous ones wait for the user to pick on the card),
+   *  - groups everyone by the labels in their names (מדמ"ח, אלתא…) and puts services in their own group.
+   */
+  async importContacts(contacts: readonly RawContact[], source: PersonSource, options: ImportOptions): Promise<ImportResult> {
+    if (options.groupId !== null) {
+      this.group(options.groupId);
     }
-    const added = contacts.map((contact) =>
-      this.buildPerson({ ...contact, gender: 'unknown', groupIds: groupId === null ? [] : [groupId], notes: '', source }),
-    );
-    await this.putPeople(added);
-    added.forEach((p) => this.people.set(p.id, p));
+    const draft = (contact: RawContact): Person =>
+      this.buildPerson({ ...contact, gender: 'unknown', groupIds: options.groupId === null ? [] : [options.groupId], notes: '', source });
 
-    const everyone = [...this.people.values()];
-    const suggestions = added.flatMap((person) => suggestionsFromName(person, everyone, this.meId));
-    const fresh = suggestions.filter((s) => relationProblem(s, this.relations.values()) === null);
-    const tx = this.db.transaction('suggestions', 'readwrite');
-    await Promise.all([...fresh.map((s) => tx.store.put(s)), tx.done]);
-    fresh.forEach((s) => this.suggestions.set(s.id, s));
-    this.changed();
-    return { added: added.length, suggested: fresh.length };
+    const added: Person[] = [];
+    const jointSuggestionList: Suggestion[] = [];
+    const singles: Person[] = [];
+    for (const contact of contacts) {
+      const joint = splitJointContact(contact);
+      if (joint === null) {
+        const person = draft(contact);
+        added.push(person);
+        singles.push(person);
+      } else {
+        const first = draft(joint.first);
+        const second = draft(joint.second);
+        added.push(first, second);
+        jointSuggestionList.push(...jointSuggestions(first, second, joint.role, contact.name, this.meId));
+      }
+    }
+    added.forEach((person) => this.people.set(person.id, person));
+
+    const scan = await this.commitNameScan(added, jointSuggestionList, singles, options.servicesGroupName);
+    return { added: added.length, ...scan };
   }
 
-  /** Applies the gender hint, adds the link and removes the suggestion — one transaction, one re-render. */
-  async acceptSuggestion(id: string): Promise<void> {
+  /**
+   * Looks for patterns in everyone's names again — for contacts imported before a rule existed.
+   * Suggestions still waiting for review are replaced by fresh ones (older rules may have read them
+   * wrongly); links that already exist are not suggested again.
+   */
+  async rescanNames(servicesGroupName: string): Promise<Omit<ImportResult, 'added'>> {
+    const stale = [...this.suggestions.values()];
+    const tx = this.db.transaction('suggestions', 'readwrite');
+    await Promise.all([...stale.map((suggestion) => tx.store.delete(suggestion.id)), tx.done]);
+    stale.forEach((suggestion) => this.suggestions.delete(suggestion.id));
+    const subjects = [...this.people.values()].filter((person) => person.id !== this.meId);
+    return this.commitNameScan([], [], subjects, servicesGroupName);
+  }
+
+  /** Name-based suggestions for `subjects` plus label/services groups for everyone, written with `newPeople` in one transaction. */
+  private async commitNameScan(
+    newPeople: Person[],
+    extraSuggestions: Suggestion[],
+    subjects: Person[],
+    servicesGroupName: string,
+  ): Promise<Omit<ImportResult, 'added'>> {
+    const everyone = [...this.people.values()];
+    const pendingKey = (suggestion: Suggestion): string => `${suggestion.subjectId}|${suggestion.type}|${suggestion.evidence}`;
+    const pending = new Set([...this.suggestions.values()].map(pendingKey));
+    const suggestions = [...extraSuggestions, ...subjects.flatMap((person) => suggestionsFromName(person, everyone, this.meId))].filter(
+      (suggestion) => !pending.has(pendingKey(suggestion)) && !this.alreadyLinked(suggestion),
+    );
+    const grouping = planNameGroups(everyone, [...this.groups.values()], this.meId, servicesGroupName);
+
+    const toWrite = new Map(newPeople.map((person) => [person.id, person]));
+    grouping.updatedPeople.forEach((person) => toWrite.set(person.id, person));
+    const tx = this.db.transaction(['people', 'groups', 'suggestions'], 'readwrite');
+    await Promise.all([
+      ...grouping.newGroups.map((group) => tx.objectStore('groups').put(group)),
+      ...[...toWrite.values()].map((person) => tx.objectStore('people').put(person)),
+      ...suggestions.map((suggestion) => tx.objectStore('suggestions').put(suggestion)),
+      tx.done,
+    ]);
+    grouping.newGroups.forEach((group) => this.groups.set(group.id, group));
+    grouping.updatedPeople.forEach((person) => this.people.set(person.id, person));
+    suggestions.forEach((suggestion) => this.suggestions.set(suggestion.id, suggestion));
+    this.changed();
+    return { suggested: suggestions.length, groups: grouping.newGroups.length };
+  }
+
+  /** True when the suggested link (or, for an unresolved one, a link of that kind from its subject) already exists. */
+  private alreadyLinked(suggestion: Suggestion): boolean {
+    if (suggestion.unresolved === null) {
+      return relationProblem(suggestion, this.relations.values()) !== null;
+    }
+    const knownSide = suggestion.unresolved.side === 'from' ? 'to' : 'from';
+    return [...this.relations.values()].some((relation) => relation.type === suggestion.type && relation[knownSide] === suggestion[knownSide]);
+  }
+
+  /**
+   * Applies the gender hint, adds the link and removes the suggestion — one transaction, one re-render.
+   * An unresolved suggestion needs `choice`: the person the contact meant, or a new person to add.
+   */
+  async acceptSuggestion(id: string, choice: EndpointChoice | null): Promise<void> {
     const suggestion = required(this.suggestions.get(id), `suggestion ${id}`);
+    let from = suggestion.from;
+    let to = suggestion.to;
+    let newPerson: Person | null = null;
+    if (suggestion.unresolved === null) {
+      assert(choice === null, 'this suggestion is already resolved');
+    } else {
+      assert(choice !== null, `choose who “${suggestion.unresolved.name}” is first`);
+      let endpointId: string;
+      if ('personId' in choice) {
+        endpointId = this.person(choice.personId).id;
+      } else {
+        assert(suggestion.unresolved.canCreate, 'this suggestion cannot add a new person');
+        newPerson = this.buildPerson({ name: choice.newPersonName, gender: 'unknown', phones: [], emails: [], groupIds: [], notes: '', source: 'manual' });
+        endpointId = newPerson.id;
+      }
+      if (suggestion.unresolved.side === 'from') from = endpointId;
+      else to = endpointId;
+    }
+
     const subject = this.person(suggestion.subjectId);
     const updatedSubject =
       subject.gender === 'unknown' && suggestion.genderHint !== 'unknown' ? { ...subject, gender: suggestion.genderHint } : null;
-    const relation: Relation | null =
-      relationProblem(suggestion, this.relations.values()) === null
-        ? { id: newId(), from: suggestion.from, to: suggestion.to, type: suggestion.type, label: suggestion.label.trim(), createdAt: Date.now() }
-        : null;
+    const draft = { from, to, type: suggestion.type, label: suggestion.label.trim() };
+    const relation: Relation | null = relationProblem(draft, this.relations.values()) === null ? { id: newId(), ...draft, createdAt: Date.now() } : null;
 
     const tx = this.db.transaction(['people', 'relations', 'suggestions'], 'readwrite');
     await Promise.all([
-      updatedSubject === null ? Promise.resolve() : tx.objectStore('people').put(updatedSubject),
+      ...[newPerson, updatedSubject].filter((person): person is Person => person !== null).map((person) => tx.objectStore('people').put(person)),
       relation === null ? Promise.resolve() : tx.objectStore('relations').put(relation),
       tx.objectStore('suggestions').delete(id),
       tx.done,
     ]);
+    if (newPerson !== null) this.people.set(newPerson.id, newPerson);
     if (updatedSubject !== null) this.people.set(updatedSubject.id, updatedSubject);
     if (relation !== null) this.relations.set(relation.id, relation);
     this.suggestions.delete(id);
@@ -398,7 +506,7 @@ export class AppStore {
     data.people.forEach((p) => this.people.set(p.id, p));
     data.relations.forEach((r) => this.relations.set(r.id, r));
     data.groups.forEach((g) => this.groups.set(g.id, g));
-    data.suggestions.forEach((s) => this.suggestions.set(s.id, s));
+    data.suggestions.forEach((s) => this.suggestions.set(s.id, withUnresolvedField(s)));
     this.currentSettings = data.settings;
   }
 

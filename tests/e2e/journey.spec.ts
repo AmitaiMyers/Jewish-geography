@@ -150,3 +150,13 @@ test('1,500 contacts: import stays fast, cards advance, the graph appears', asyn
   await expect(openSheet(page).locator('.tag', { hasText: 'parent of' })).toBeVisible();
   await expect(openSheet(page).locator('.list-row', { hasText: 'שאול כהן' })).toBeVisible();
 });
+
+test('rescanning names refreshes waiting suggestions without duplicating them', async ({ page }) => {
+  await onboard(page, 'Amitai', '');
+  await importVcf(page, vcfFile(['Mom', 'שאול כהן', 'אמא שאול', ...['תומר', 'גל', 'נועה', 'יובל', 'עידן'].map((first) => `${first} מדמ"ח`)]));
+  await expect(page.locator('#toast')).toContainText('Made 1 group from a label in names.');
+  await goToTab(page, /^Me/);
+  await page.getByRole('button', { name: /Look for patterns in names/ }).click();
+  await expect(page.locator('#toast')).toContainText('New groups: 0. New suggestions: 2.');
+  await expect(page.getByRole('tab', { name: /Me/ }).locator('.badge')).toHaveText('2');
+});

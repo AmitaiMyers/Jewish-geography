@@ -77,6 +77,22 @@ export class MeView implements View {
         h('h2', { class: 'section-title grow' }, t('groups')),
         h('button', { class: 'btn', onclick: () => void this.ctx.createGroup() }, icon('plus'), t('newGroup')),
       ),
+      h(
+        'button',
+        {
+          class: 'option-card',
+          onclick: async (event: Event) => {
+            (event.currentTarget as HTMLElement).setAttribute('aria-busy', 'true');
+            const result = await store.rescanNames(t('servicesGroup'));
+            toast(t('rescanDone', { groups: result.groups, suggested: result.suggested }), {
+              success: true,
+              action: result.suggested > 0 ? { label: t('review'), run: () => this.ctx.openSuggestions() } : undefined,
+            });
+          },
+        },
+        h('span', { class: 'option-icon' }, icon('sparkle')),
+        h('span', { class: 'grow' }, h('span', { class: 'row-title' }, t('rescanTitle')), h('span', { class: 'row-sub' }, t('rescanHint'))),
+      ),
       groups.length === 0
         ? h('p', { class: 'muted' }, t('noGroups'))
         : h('ul', { class: 'list card', style: 'padding-block:4px' }, ...groups.map((group) => this.groupRow(group))),

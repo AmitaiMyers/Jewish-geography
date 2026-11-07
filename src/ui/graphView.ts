@@ -1,11 +1,12 @@
 import cytoscape, { type Collection, type Core, type EdgeSingular, type NodeCollection, type NodeSingular, type StylesheetJson } from 'cytoscape';
 import fcose from 'cytoscape-fcose';
+import { clusterLayout } from '../graph/clusterLayout';
 import { convexHull } from '../graph/hull';
 import { t } from '../i18n/i18n';
 import { assert } from '../model/assert';
 import { relationToMeText, type AppContext, type Highlight, type View } from './context';
 import { h, replaceChildren } from './dom';
-import { buildGraphElements, isLoose } from './graphElements';
+import { buildGraphElements, hubId, isLoose, LARGE_CORE } from './graphElements';
 import { icon, networkIllustration } from './icons';
 import { DURATION, duration, haptic, prefersReducedMotion } from './motion';
 
@@ -15,8 +16,7 @@ const DARK_SCHEME = window.matchMedia('(prefers-color-scheme: dark)');
 const COACH_KEY = 'jg.coach.tapPerson';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PATH_STAGGER_MS = 60;
-/** Above this many connected people the layout switches to its faster "draft" mode without animation. */
-const LARGE_CORE = 250;
+const LAYOUT_DEBOUNCE_MS = 300;
 const MIN_CORE_TO_FOCUS = 4;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const SPIRAL_SPACING = 16;
@@ -58,7 +58,11 @@ function stylesheet(showLoose: boolean): StylesheetJson {
         'transition-duration': duration(DURATION.base),
       },
     },
-    { selector: 'node.core', style: { 'background-image': 'data(avatar)', 'background-fit': 'cover' } },
+    { selector: 'node.rich', style: { 'background-image': 'data(avatar)', 'background-fit': 'cover' } },
+    {
+      selector: 'node.lite',
+      style: { 'background-color': 'data(color)', 'background-opacity': 1, 'border-width': 4, 'border-color': 'data(ring)', width: 28, height: 28 },
+    },
     {
       selector: 'node.loose',
       style: {
@@ -124,6 +128,7 @@ export class GraphView implements View {
   private highlight: Highlight | null = null;
   private fabOpen = false;
   private showLoose = false;
+  private layoutTimer: number | undefined;
   private haloShown = false;
   private hullFrame = 0;
   private staggerTimers: number[] = [];
@@ -214,7 +219,8 @@ export class GraphView implements View {
     this.renderA11yList();
     this.applyHighlight(false);
     if (this.isVisible() && this.layoutNeeded) {
-      this.runLayout(false);
+      if (this.hasLaidOut) this.scheduleLayout();
+      else this.runLayout(false);
     }
   }
 
@@ -270,6 +276,8 @@ export class GraphView implements View {
           if (existing.hasClass('loose') !== classes.includes('loose')) {
             existing.classes(classes); // became connected (or lost its last link): it moves between spiral and core
             structureChanged = true;
+          } else if (existing.hasClass('lite') !== classes.includes('lite')) {
+            existing.classes(classes); // the graph crossed the size where avatars switch to plain circles
           }
         }
       }
@@ -277,35 +285,29 @@ export class GraphView implements View {
     this.layoutNeeded ||= structureChanged;
   }
 
+  /** Re-layouts are debounced: accepting several suggestions in a row lays out once, after the last. */
+  private scheduleLayout(): void {
+    window.clearTimeout(this.layoutTimer);
+    this.layoutTimer = window.setTimeout(() => this.runLayout(false), LAYOUT_DEBOUNCE_MS);
+  }
+
   /**
-   * Force layout (fcose) runs on the connected core only — its cost grows with the square of the node count.
-   * Loose people then go into a sunflower spiral around the core in linear time.
+   * Small graphs: force layout (fcose) on the connected core — organic, but its cost grows with n².
+   * Large graphs: the O(n) cluster layout (me, then family, then one disc per group).
+   * Either way, loose people then go into a sunflower spiral around the core.
    */
   private runLayout(force: boolean): void {
     if (!force && !this.layoutNeeded) {
       return;
     }
+    window.clearTimeout(this.layoutTimer);
     this.layoutNeeded = false;
     const cy = this.cy;
     const firstTime = !this.hasLaidOut;
     this.hasLaidOut = true;
     const core = cy.elements().difference(cy.nodes('.loose'));
-    const large = core.nodes('.person').length > LARGE_CORE;
-    const layout = core.layout({
-      name: 'fcose',
-      quality: large ? 'draft' : 'default',
-      randomize: firstTime || force,
-      animate: !firstTime && !large && !prefersReducedMotion(),
-      animationDuration: DURATION.slow,
-      animationEasing: 'ease-out',
-      fit: false,
-      packComponents: false,
-      nodeDimensionsIncludeLabels: false,
-      idealEdgeLength: (edge: EdgeSingular) => (edge.hasClass('anchor') ? 170 : edge.hasClass('member') ? 45 : 85),
-      edgeElasticity: (edge: EdgeSingular) => (edge.hasClass('member') ? 0.8 : 0.45),
-      nodeRepulsion: (node: NodeSingular) => (node.hasClass('hub') ? 800 : 7000),
-      numIter: large ? 1000 : 2500,
-    } as cytoscape.LayoutOptions);
+    const animate = !firstTime && !prefersReducedMotion();
+    const layout = core.nodes('.person').length > LARGE_CORE ? this.clusterLayoutOf(core, animate) : this.forceLayoutOf(core, animate, firstTime || force);
     void layout.promiseOn('layoutstop').then(() => {
       this.placeLooseNodes();
       if (firstTime || force) {
@@ -316,6 +318,47 @@ export class GraphView implements View {
       }
     });
     layout.run();
+  }
+
+  private forceLayoutOf(core: Collection, animate: boolean, randomize: boolean): cytoscape.Layouts {
+    return core.layout({
+      name: 'fcose',
+      quality: 'default',
+      randomize,
+      animate,
+      animationDuration: DURATION.slow,
+      animationEasing: 'ease-out',
+      fit: false,
+      packComponents: false,
+      nodeDimensionsIncludeLabels: false,
+      idealEdgeLength: (edge: EdgeSingular) => (edge.hasClass('anchor') ? 170 : edge.hasClass('member') ? 45 : 85),
+      edgeElasticity: (edge: EdgeSingular) => (edge.hasClass('member') ? 0.8 : 0.45),
+      nodeRepulsion: (node: NodeSingular) => (node.hasClass('hub') ? 800 : 7000),
+      numIter: 2500,
+    } as cytoscape.LayoutOptions);
+  }
+
+  private clusterLayoutOf(core: Collection, animate: boolean): cytoscape.Layouts {
+    const store = this.ctx.store;
+    const corePeople = core.nodes('.core').map((node) => store.person(node.id()));
+    const groups = [...store.groups.values()]
+      .map((group) => ({ id: group.id, memberIds: corePeople.filter((p) => p.groupIds.includes(group.id)).map((p) => p.id) }))
+      .filter((group) => group.memberIds.length > 0);
+    const ungroupedIds = corePeople.filter((p) => p.id !== store.meId && p.groupIds.length === 0).map((p) => p.id);
+    const { positions, groupCenters } = clusterLayout({ meId: store.meId, groups, ungroupedIds });
+    const hubCenters = new Map([...groupCenters].map(([groupId, center]) => [hubId(groupId), center]));
+    return core.layout({
+      name: 'preset',
+      positions: (node: NodeSingular) => {
+        const position = positions.get(node.id()) ?? hubCenters.get(node.id());
+        assert(position !== undefined, `cluster layout has no position for ${node.id()}`);
+        return position;
+      },
+      animate,
+      animationDuration: DURATION.slow,
+      animationEasing: 'ease-out',
+      fit: false,
+    } as cytoscape.LayoutOptions);
   }
 
   /** Golden-angle spiral: evenly spaced dots, deterministic order (by name), O(n). */

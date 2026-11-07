@@ -1,7 +1,7 @@
 import type { ElementDefinition } from 'cytoscape';
 import { isFamilyType, type Person } from '../model/types';
 import type { AppStore } from '../store/appStore';
-import { avatarDataUri, currentTheme, hueFor } from './avatar';
+import { avatarColors, avatarDataUri, currentTheme, hueFor } from './avatar';
 import { groupColors } from './context';
 
 /**
@@ -11,7 +11,8 @@ import { groupColors } from './context';
  * "Loose" people — imported contacts not linked to anyone yet, often the large majority — are light
  * dots without images, placed in a cheap spiral around the core, so 1,500+ contacts stay fast.
  * Invisible layout helpers keep the core readable: one hidden "hub" per group tied to its members
- * (groups gather into clusters), and hidden "anchor" links from me to each hub.
+ * (groups gather into clusters), and hidden "anchor" links from me to each hub and to linked people
+ * outside any group.
  */
 
 export const hubId = (groupId: string): string => `hub:${groupId}`;
@@ -20,24 +21,38 @@ export function isLoose(store: AppStore, person: Person): boolean {
   return person.id !== store.meId && person.groupIds.length === 0 && store.index.degree(person.id) === 0;
 }
 
+/** Above this many connected people nodes are plain coloured circles: decoding hundreds of avatar images freezes phones. */
+export const LARGE_CORE = 150;
+
 export function buildGraphElements(store: AppStore): ElementDefinition[] {
   const meId = store.meId;
   const theme = currentTheme();
   const elements: ElementDefinition[] = [];
+  const people = [...store.people.values()];
+  const loose = new Set(people.filter((person) => isLoose(store, person)).map((person) => person.id));
+  const lite = people.length - loose.size > LARGE_CORE;
 
-  for (const person of store.people.values()) {
-    if (isLoose(store, person)) {
+  for (const person of people) {
+    if (loose.has(person.id)) {
       elements.push({
         group: 'nodes',
-        data: { id: person.id, label: person.name, color: `hsl(${hueFor(person.name)} 45% 60%)` },
+        data: { id: person.id, label: person.name, color: `hsl(${hueFor(person.name)}, 45%, 60%)` },
         classes: 'person loose',
       });
     } else {
+      const colors = groupColors(store, person);
+      const data = lite
+        ? { id: person.id, label: person.name, color: avatarColors(person.name, theme).background, ring: colors[0] ?? avatarColors(person.name, theme).foreground }
+        : { id: person.id, label: person.name, avatar: avatarDataUri(person.name, colors, theme) };
       elements.push({
         group: 'nodes',
-        data: { id: person.id, label: person.name, avatar: avatarDataUri(person.name, groupColors(store, person), theme) },
-        classes: person.id === meId ? 'person core me' : 'person core',
+        data,
+        classes: `person core ${lite ? 'lite' : 'rich'}${person.id === meId ? ' me' : ''}`,
       });
+      // Linked people outside any group (family, friends) are tied to me, so no little island drifts away.
+      if (person.id !== meId && person.groupIds.length === 0) {
+        elements.push(layoutEdge(`anchor:${person.id}`, meId, person.id, 'anchor'));
+      }
     }
   }
 

@@ -10,7 +10,8 @@ A Progressive Web App that maps everyone you know as a graph, shows how they are
 |---|---|
 | **Graph** | Avatars with initials, ringed in their groups' colours. Family links are terracotta, social links are slate. Tapping a group outlines its cluster. Chains light up step by step in gold. New people pop out from "me". There is a quick-action button, plus a keyboard and screen-reader list version of the graph. |
 | **Import** | **Android:** pick phone contacts directly. **iPhone / Google:** a `.vcf` file. **WhatsApp:** an exported chat (it can become a group). **Facebook:** `friends.json`. Duplicates are detected by phone or email and left unticked in the review screen. |
-| **Suggestions** | Names like `Mom`, `Uncle Moshe`, `Rivka (Sarah's mom)` or `אבא של שרה` become suggested links, reviewed one card at a time (swipe or tap). |
+| **Suggestions** | Contact names become suggested links, reviewed one card at a time (swipe or tap). See [Name patterns](#name-patterns). When a name fits several people ("אמא של רז"), the card asks which one; a missing child ("אמא של יושו") can be added. |
+| **Groups from names** | Labels shared by 5 or more contacts ("תומר מדמ"ח", "Liraz Axioma", "דניאל מילואים") become groups automatically. Service contacts (taxi, delivery, clinic…) go into a **Services** group. |
 | **Family inference** | From parent, spouse and sibling links, the app works out uncle, great-aunt, second cousin once removed, brother-in-law, mechutan… in English and Hebrew. |
 | **Connect** | For any two people: their family relation, the shortest chain (shown as a ribbon of avatars), and mutual connections. |
 | **Compare with a friend** (stage 2) | Show your QR code and scan theirs, or share the code as text (WhatsApp, AirDrop…). You see who you both know, confirm the list, and both graphs are linked. No server is involved. |
@@ -23,6 +24,22 @@ A Progressive Web App that maps everyone you know as a graph, shows how they are
 - **Kinship:** each family walk becomes up / down / spouse steps, and its shape `[spouse] up^u down^d [spouse]` maps to a term ([`src/graph/kinship.ts`](src/graph/kinship.ts)). Everyone's relation to you comes from one BFS, cached per change.
 - **Comparing graphs:** a salted **Bloom filter** of your contacts' phone and email keys (about 11 bits per contact, ≈0.5% false matches). 500 contacts fit in one QR code ([`src/compare/`](src/compare)).
 - **Group outline:** the convex hull of the members' positions (monotone chain), redrawn every frame.
+- **Large graphs:** up to about 150 connected people, the force layout runs and nodes show initials. Above that, an O(n) **cluster layout** takes over (you, then family, then one disc per group on a ring) with plain coloured nodes. Unconnected contacts are hidden behind a chip and drawn as a spiral of dots on demand. 1,500 contacts import in a few seconds on a phone.
+- **Labels in names:** a word shared by enough contacts that isn't a first name (it usually comes first) or a common surname. Words that always appear together become one label ("באר שבע").
+
+## Name patterns
+
+| Contact name | Suggestion |
+|---|---|
+| `Mom`, `אבא`, `סבתא`, `Savta` | your mother / father / grandmother |
+| `Uncle Moshe`, `דודה רחל`, `Avi (cousin)`, `לילך בת דודה` | your relative, labelled |
+| `אמא של רז`, `אורנה אמא של הילה`, `Rivka (Sarah's mom)`, `אמא שאול` | parent of Raz / Hila / Sarah / Shaul |
+| `נעמה של ניצן` | Naama and Nitzan are a couple |
+| `שכנה של קרן`, `מזכירה של אריה`, `חברה של ניצן` | neighbour / colleague / friend of that person |
+| `פני וגרי סבא וסבתא` | split into two people: your grandparents, and a couple |
+| `מתן שכן`, `חבר` | your neighbour / friend |
+
+Ambiguous words are left alone on purpose: `דוד` is also David, `בן דוד` a surname, `כפר סבא` a city.
 
 ## Development
 
