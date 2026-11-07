@@ -217,3 +217,22 @@ test('an iPhone WhatsApp export (.zip) imports the group, and people already her
   await expect(openSheet(page).getByRole('button', { name: '108 משפחה' })).toHaveAttribute('aria-pressed', 'true');
   await expect(openSheet(page).locator('.list-row', { hasText: 'Amitai' }).locator('.tag')).toHaveText('army / sherut friend');
 });
+
+test('reopening the app draws the graph even when "me" is not first in storage', async ({ page }) => {
+  // Storage returns people sorted by random id; with 20 linked people some sort before "me".
+  await onboard(page, 'Amitai', '');
+  const chooser = page.waitForEvent('filechooser');
+  await openSheet(page).getByRole('button', { name: /Contacts file/ }).click();
+  // Distinct names: a shared word ("Friend 1", "Friend 2"…) would become a group, and grouped people are not anchored to me.
+  await (await chooser).setFiles(vcfFile(Array.from({ length: 20 }, (_, i) => `Pal${i}x Q${i}z`)));
+  const review = openSheet(page);
+  await review.getByRole('combobox', { name: 'How do you know them?' }).selectOption('friend');
+  await review.getByRole('button', { name: 'Import 20' }).click();
+  await expect(page.locator('#toast')).toContainText('Linked 20 people to you.');
+
+  await page.reload();
+  await expect(page.getByRole('tab', { name: /Graph/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.graph-a11y [data-person]')).toHaveCount(21);
+  await page.waitForTimeout(500);
+  await expect(page.locator('#toast')).not.toContainText('Something went wrong');
+});

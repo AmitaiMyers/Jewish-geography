@@ -75,7 +75,9 @@ export function buildGraphElements(store: AppStore): ElementDefinition[] {
       elements.push(layoutEdge(`member:${group.id}:${member.id}`, hubId(group.id), member.id, 'member'));
     }
   }
-  return elements;
+  // Every node before any edge: Cytoscape rejects an edge whose end is not added yet, and people come
+  // back from storage sorted by id, so "me" is not necessarily first.
+  return [...elements.filter((element) => element.group === 'nodes'), ...elements.filter((element) => element.group === 'edges')];
 }
 
 function layoutEdge(id: string, source: string, target: string, kind: 'anchor' | 'member'): ElementDefinition {
