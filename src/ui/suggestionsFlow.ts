@@ -2,14 +2,16 @@ import { relationLabelFrom, t } from '../i18n/i18n';
 import type { StringKey } from '../i18n/strings';
 import type { EndpointChoice, FamilyKind, Suggestion, UnresolvedEndpoint } from '../model/types';
 import { avatar } from './avatar';
+import { JgPersonPicker } from './components/personPicker';
 import { JgSheet } from './components/sheet';
 import { groupColors, type AppContext } from './context';
 import { bdi, h, uniqueId } from './dom';
-import { checkIcon } from './icons';
+import { checkIcon, icon } from './icons';
 import { duration, DURATION, haptic, shake, wait } from './motion';
 
 const SWIPE_THRESHOLD = 90;
 const NEW_PERSON = '__new__';
+const SOMEONE_ELSE = '__search__';
 const FAMILY_KINDS: readonly { kind: FamilyKind; label: StringKey }[] = [
   { kind: 'parent', label: 'kindParent' },
   { kind: 'child', label: 'kindChild' },
@@ -46,6 +48,7 @@ function radioGroup(legend: string, options: { value: string; content: (Node | s
 /**
  * Reviews suggested links one card at a time: swipe right / Accept, swipe left / Skip.
  * A card may first ask "Which Raz?" (ambiguous name) and/or "How is Yoni Myers related to you?" (shared surname).
+ * "Which Raz?" also lets me search all my contacts myself, or discard the connection outright.
  */
 export function openSuggestionCards(ctx: AppContext): void {
   const store = ctx.store;
@@ -111,7 +114,17 @@ export function openSuggestionCards(ctx: AppContext): void {
 
     const whoChooser = (pending: UnresolvedEndpoint): HTMLElement => {
       const candidates = pending.candidateIds.map((id) => store.person(id));
-      return radioGroup(
+      const knownId = suggestion[pending.side === 'from' ? 'to' : 'from'];
+      const picker = JgPersonPicker.create(store, {
+        label: t('searchContactsFor', { name: pending.name }),
+        exclude: () => [knownId],
+        onChoose: (personId) => {
+          answers.endpoint = { personId };
+          refresh();
+        },
+      });
+      picker.hidden = true;
+      const choices = radioGroup(
         t('whichPerson', { name: pending.name }),
         [
           ...candidates.map((person) => ({
@@ -122,11 +135,25 @@ export function openSuggestionCards(ctx: AppContext): void {
           ...(pending.canCreate
             ? [{ value: NEW_PERSON, content: [avatar(pending.name, [], 'sm'), h('span', { class: 'grow' }, t('someoneNew', { name: pending.name }))], checked: candidates.length === 0 }]
             : []),
+          { value: SOMEONE_ELSE, content: [icon('search'), h('span', { class: 'grow' }, t('someoneElse'))], checked: false },
         ],
         (value) => {
-          answers.endpoint = value === NEW_PERSON ? { newPersonName: pending.name } : { personId: value };
+          picker.hidden = value !== SOMEONE_ELSE;
+          if (value === SOMEONE_ELSE) {
+            answers.endpoint = picker.value === null ? null : { personId: picker.value };
+            picker.focusInput();
+          } else {
+            answers.endpoint = value === NEW_PERSON ? { newPersonName: pending.name } : { personId: value };
+          }
           refresh();
         },
+      );
+      return h(
+        'div',
+        { class: 'stack', style: 'width:100%' },
+        choices,
+        picker,
+        h('button', { class: 'btn btn-ghost btn-danger btn-block', onclick: () => void decide(suggestion, false, answers, card, -1) }, icon('trash'), t('discardConnection')),
       );
     };
     const kindChooser = (): HTMLElement =>
@@ -169,7 +196,7 @@ export function openSuggestionCards(ctx: AppContext): void {
         h('p', { class: 'caption', style: 'text-align:center' }, asks ? t('chooseWhoFirst') : t('swipeHint')),
       ),
     );
-    sheet.setFooter(h('button', { class: 'btn', onclick: () => void decide(suggestion, false, answers, card, -1) }, t('skip')), accept);
+    sheet.setFooter(h('button', { class: 'btn', onclick: () => void decide(suggestion, false, answers, card, -1) }, t('discard')), accept);
     sheet.open(asks ? 'full' : 'half');
   };
 
@@ -181,7 +208,7 @@ export function openSuggestionCards(ctx: AppContext): void {
 function enableSwipe(card: HTMLElement, onSwipe: (direction: 1 | -1) => void): void {
   card.addEventListener('pointerdown', (down) => {
     // Let taps on the choices work normally: capturing the pointer would swallow their clicks.
-    if ((down.target as HTMLElement).closest('label, input, button') !== null) return;
+    if ((down.target as HTMLElement).closest('label, input, button, jg-person-picker') !== null) return;
     const startX = down.clientX;
     let dx = 0;
     card.setPointerCapture(down.pointerId);

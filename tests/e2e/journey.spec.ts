@@ -104,7 +104,38 @@ test('two friends compare graphs and see who they both know', async ({ browser }
   const replay = yossi.getByRole('dialog', { name: 'Pitzuchim!' });
   await expect(replay.getByRole('button', { name: 'Sarah C' })).toBeVisible();
   await expect(replay.getByRole('button', { name: 'Show on graph' })).toBeVisible();
+  await replay.getByRole('button', { name: 'Close' }).click();
+
+  // Holding Amitai on the graph leaves only the two of us and Sarah; letting go brings everyone back.
+  await goToTab(yossi, /Graph/);
+  const everyone = await visibleNodeCount(yossi);
+  const amitaiNode = await nodeOnScreen(yossi, 'Amitai');
+  await yossi.mouse.move(amitaiNode.x, amitaiNode.y);
+  await yossi.mouse.down();
+  await expect(yossi.getByRole('status').filter({ hasText: 'Only who you and Amitai both know · 1' })).toBeVisible();
+  await expect.poll(() => visibleNodeCount(yossi)).toBe(3);
+  await yossi.mouse.up();
+  await expect(yossi.locator('.graph-banner')).toBeHidden();
+  await expect.poll(() => visibleNodeCount(yossi)).toBe(everyone);
+  await expect(yossi.locator('dialog.sheet[open]')).toHaveCount(0); // a hold is not a tap: no card opens
 });
+
+/** Cytoscape keeps its instance on the container; tests read node positions from it (no test hooks in the app). */
+async function nodeOnScreen(page: Page, label: string): Promise<{ x: number; y: number }> {
+  return page.locator('.graph-canvas').evaluate((canvas, name) => {
+    const cy = (canvas as unknown as { _cyreg: { cy: import('cytoscape').Core } })._cyreg.cy;
+    const node = cy.nodes('.person').filter((n) => n.data('label') === name)[0];
+    if (node === undefined) throw new Error(`no node labelled ${name}`);
+    const box = canvas.getBoundingClientRect();
+    return { x: box.left + node.renderedPosition().x, y: box.top + node.renderedPosition().y };
+  }, label);
+}
+
+function visibleNodeCount(page: Page): Promise<number> {
+  return page
+    .locator('.graph-canvas')
+    .evaluate((canvas) => (canvas as unknown as { _cyreg: { cy: import('cytoscape').Core } })._cyreg.cy.nodes('.person:visible').length);
+}
 
 async function expectAccessible(page: Page, label: string): Promise<void> {
   // @axe-core/playwright is typed against a newer playwright-core than the pinned test runner; same runtime API.
@@ -175,6 +206,39 @@ test('rescanning names refreshes waiting suggestions without duplicating them', 
   await page.getByRole('button', { name: /Look for patterns in names/ }).click();
   await expect(page.locator('#toast')).toContainText('New groups: 0. New suggestions: 2.');
   await expect(page.getByRole('tab', { name: /Me/ }).locator('.badge')).toHaveText('2');
+});
+
+test('"Which Raz?" can search all my contacts or discard the link, and a discarded link stays gone', async ({ page }) => {
+  await onboard(page, 'Amitai', '');
+  await importVcf(page, vcfFile(['אמא של רז', 'אבא של רז', 'רז כהן', 'רז לוי', 'Dana Katz']));
+  await page.locator('#toast').getByRole('button', { name: 'Review' }).click();
+  const cards = openSheet(page);
+
+  // First card: the right Raz is not offered, so I find her myself.
+  const which = cards.getByRole('group', { name: 'Which רז?' });
+  await which.getByText('Someone else: search my contacts').click();
+  await expect(cards.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
+  await cards.getByRole('combobox', { name: 'Search my contacts for רז' }).fill('Dana');
+  await cards.getByRole('option', { name: 'Dana Katz' }).click();
+  await cards.getByRole('button', { name: 'Accept', exact: true }).click();
+
+  // Second card ("אבא של רז"): none of them — discard it. Third (the two as a couple): discard from the footer.
+  await expect(cards.getByText('2 of 3')).toBeVisible();
+  await cards.getByRole('button', { name: 'None of these: discard this connection' }).click();
+  await expect(cards.getByText('3 of 3')).toBeVisible();
+  await cards.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(cards.getByRole('heading', { name: 'All reviewed!' })).toBeVisible();
+  await cards.getByRole('button', { name: 'Done' }).click();
+
+  await goToTab(page, /People/);
+  await page.locator('#view-people li', { hasText: 'Dana Katz' }).getByRole('button').click();
+  await expect(openSheet(page).locator('.list-row', { hasText: 'אמא של רז' })).toBeVisible();
+  await openSheet(page).getByRole('button', { name: 'Close' }).click();
+
+  // Looking at names again neither re-suggests the accepted link nor the discarded one.
+  await goToTab(page, /^Me/);
+  await page.getByRole('button', { name: /Look for patterns in names/ }).click();
+  await expect(page.locator('#toast')).toContainText('New suggestions: 0.');
 });
 
 test('"This is me" adds my Hebrew name, so relatives by surname are found and the card asks how', async ({ page }) => {

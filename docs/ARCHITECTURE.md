@@ -26,7 +26,7 @@ Person    { id, name, gender, phones[], emails[], groupIds[], notes, source }
 Relation  { id, from, to, type, label }      // parent: from IS PARENT OF to
 Group     { id, name, color }
 Suggestion{ from, to, type, label, subjectId, genderHint, evidence }
-Settings  { meId, language }
+Settings  { meId, language, dismissedSuggestions[] }   // keys "subjectId|type|evidence"
 ```
 
 "Me" is an ordinary person (`source: 'self'`). People you have not linked to anyone are tied to you by invisible layout edges, so the graph stays compact.

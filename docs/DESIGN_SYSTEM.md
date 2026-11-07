@@ -115,6 +115,7 @@ When the user has asked for reduced motion (`prefers-reduced-motion: reduce`), e
 | Graph: open a person | Camera eases to the node, neighbours fan out slightly, and the sheet slides to peek height. |
 | Graph: find a path | The camera frames the path, then edges light up one after another along it (60 ms stagger) in gold. |
 | Graph: filter a group | Non-members fade to 12% opacity over 220 ms, and the group cluster gains a soft tinted outline around it. |
+| Graph: press and hold a person | Everyone except me, them and the people we both know is removed (not faded); the shared people spread into a golden-angle spiral around the pair, grouped people together, and a gold banner says "✨ Only who you and Noa both know · 104". Releasing (anywhere) restores positions, highlight and camera. A tap within 400 ms of a release is ignored, so the card does not open. |
 | New people added | Nodes pop in from the "me" node with a spring, then the layout morphs from old positions to new. |
 | Accepting a suggestion | The card collapses into the matching edge on the graph thumbnail; the badge count ticks down. |
 

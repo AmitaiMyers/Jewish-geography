@@ -113,6 +113,16 @@ function upgradePerson(person: Person): Person {
   return { ...saved, otherNames: saved.otherNames ?? [] };
 }
 
+function upgradeSettings(settings: Settings): Settings {
+  const saved = settings as Partial<Settings> & Omit<Settings, 'dismissedSuggestions'>;
+  return { ...saved, dismissedSuggestions: saved.dismissedSuggestions ?? [] };
+}
+
+/** The same name read the same way gives the same key, however many times names are scanned. */
+function suggestionKey(suggestion: Suggestion): string {
+  return `${suggestion.subjectId}|${suggestion.type}|${suggestion.evidence}`;
+}
+
 export class AppStore {
   readonly people = new Map<string, Person>();
   readonly relations = new Map<string, Relation>();
@@ -189,7 +199,7 @@ export class AppStore {
   async createMe(name: string, language: Language, phones: string[]): Promise<void> {
     assert(this.currentSettings === null, 'onboarding already done');
     const me = this.buildPerson({ name, gender: 'unknown', phones, emails: [], groupIds: [], notes: '', source: 'self' });
-    const settings: Settings = { meId: me.id, language };
+    const settings: Settings = { meId: me.id, language, dismissedSuggestions: [] };
     const tx = this.db.transaction(['people', 'settings'], 'readwrite');
     await Promise.all([tx.objectStore('people').put(me), tx.objectStore('settings').put(settings, 'settings'), tx.done]);
     this.people.set(me.id, me);
@@ -490,8 +500,7 @@ export class AppStore {
     newRelations: readonly Relation[] = [],
   ): Promise<Omit<ImportResult, 'added' | 'linked'>> {
     const everyone = [...this.people.values()];
-    const pendingKey = (suggestion: Suggestion): string => `${suggestion.subjectId}|${suggestion.type}|${suggestion.evidence}`;
-    const pending = new Set([...this.suggestions.values()].map(pendingKey));
+    const known = new Set([...[...this.suggestions.values()].map(suggestionKey), ...this.settings.dismissedSuggestions]);
     const relations = [...this.relations.values(), ...newRelations];
     const fromNames = refineParentHints(
       subjects.flatMap((person) => suggestionsFromName(person, everyone, this.meId)),
@@ -499,7 +508,7 @@ export class AppStore {
       petNames(everyone.map((person) => person.name)),
     );
     const suggestions = [...extraSuggestions, ...fromNames].filter(
-      (suggestion) => !pending.has(pendingKey(suggestion)) && !alreadyLinked(suggestion, relations),
+      (suggestion) => !known.has(suggestionKey(suggestion)) && !alreadyLinked(suggestion, relations),
     );
     const grouping = planNameGroups(everyone, [...this.groups.values()], this.meId, servicesGroupName);
 
@@ -575,12 +584,15 @@ export class AppStore {
     this.changed();
   }
 
-  async dismissSuggestion(id: string): Promise<Snapshot> {
+  /** Discards a suggestion for good: it is remembered so that looking at names again does not suggest it again. */
+  async dismissSuggestion(id: string): Promise<void> {
     const suggestion = required(this.suggestions.get(id), `suggestion ${id}`);
-    await this.db.delete('suggestions', id);
+    const settings: Settings = { ...this.settings, dismissedSuggestions: unique([...this.settings.dismissedSuggestions, suggestionKey(suggestion)]) };
+    const tx = this.db.transaction(['suggestions', 'settings'], 'readwrite');
+    await Promise.all([tx.objectStore('suggestions').delete(id), tx.objectStore('settings').put(settings, 'settings'), tx.done]);
     this.suggestions.delete(id);
+    this.currentSettings = settings;
     this.changed();
-    return { ...EMPTY_SNAPSHOT, suggestions: [suggestion] };
   }
 
   // ---------- comparing with a friend (stage 2) ----------
@@ -663,7 +675,7 @@ export class AppStore {
     data.relations.forEach((r) => this.relations.set(r.id, r));
     data.groups.forEach((g) => this.groups.set(g.id, g));
     data.suggestions.forEach((s) => this.suggestions.set(s.id, upgradeSuggestion(s)));
-    this.currentSettings = data.settings;
+    this.currentSettings = data.settings === null ? null : upgradeSettings(data.settings);
   }
 
   private buildPerson(draft: PersonDraft): Person {

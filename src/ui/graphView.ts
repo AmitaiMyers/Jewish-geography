@@ -9,6 +9,7 @@ import { h, replaceChildren } from './dom';
 import { buildGraphElements, hubId, isLoose, LARGE_CORE } from './graphElements';
 import { icon, networkIllustration } from './icons';
 import { DURATION, duration, haptic, prefersReducedMotion } from './motion';
+import { sharedBetween } from './pitzuchim';
 
 cytoscape.use(fcose);
 
@@ -20,6 +21,19 @@ const LAYOUT_DEBOUNCE_MS = 300;
 const MIN_CORE_TO_FOCUS = 4;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const SPIRAL_SPACING = 16;
+/** Cytoscape still reports a tap when a long press ends; taps this soon after a hold are ignored. */
+const TAP_AFTER_HOLD_MS = 400;
+/** While a person is held, the people we share are spread around the two of us, spaced for their names. */
+const SHARED_INNER_RADIUS = 110;
+const SHARED_SPACING = 30;
+const PAIR_GAP = 45;
+
+/** Golden-angle spiral: evenly spaced points around a center, the i-th one `spacing·√i` beyond `innerRadius`. */
+function spiralPosition(center: cytoscape.Position, innerRadius: number, spacing: number, i: number): cytoscape.Position {
+  const radius = innerRadius + spacing * Math.sqrt(i);
+  const angle = i * GOLDEN_ANGLE;
+  return { x: center.x + radius * Math.cos(angle), y: center.y + radius * Math.sin(angle) };
+}
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -100,6 +114,7 @@ function stylesheet(showLoose: boolean): StylesheetJson {
     { selector: 'edge[type = "custom"], edge[type = "relative"], edge[type = "knows"]', style: { 'line-style': 'dashed', 'line-dash-pattern': [6, 4] } },
     { selector: 'edge.hover', style: { opacity: 1, width: 3 } },
     { selector: '.faded', style: { opacity: 0.12 } },
+    { selector: '.gone', style: { display: 'none' } },
     { selector: 'node.highlight', style: { 'underlay-color': accent, 'underlay-opacity': 0.55, 'underlay-padding': 6, 'z-index': 10 } },
     { selector: 'edge.highlight', style: { 'line-color': accent, 'target-arrow-color': accent, width: 4, opacity: 1, 'z-index': 10 } },
   ];
@@ -120,6 +135,7 @@ export class GraphView implements View {
   private readonly fabWrap = h('div', { class: 'fab-wrap' });
   private readonly emptyLayer = h('div', { class: 'graph-empty' });
   private readonly coachLayer = h('div', {});
+  private readonly sharedBanner = h('div', { class: 'graph-banner', role: 'status', hidden: true });
   private readonly a11yList = h('ul', { class: 'list' });
   private readonly a11yNav = h('nav', { class: 'graph-a11y' }, this.a11yList);
   private cyInstance: Core | null = null;
@@ -132,6 +148,10 @@ export class GraphView implements View {
   private haloShown = false;
   private hullFrame = 0;
   private staggerTimers: number[] = [];
+  /** While a person is held down: what to go back to when they are released. */
+  private hold: { highlight: Highlight | null; zoom: number; pan: cytoscape.Position; positions: Map<string, cytoscape.Position> } | null = null;
+  private holdLayout: cytoscape.Layouts | null = null;
+  private holdEndedAt = 0;
 
   constructor(private readonly ctx: AppContext) {
     const hull = document.createElementNS(SVG_NS, 'svg');
@@ -146,6 +166,7 @@ export class GraphView implements View {
       this.a11yNav,
       this.chips,
       this.coachLayer,
+      this.sharedBanner,
       this.emptyLayer,
       this.tools,
       this.fabWrap,
@@ -156,6 +177,9 @@ export class GraphView implements View {
         this.setFab(false);
       }
     });
+    // The finger may slide off the canvas before lifting: any release anywhere ends a hold.
+    window.addEventListener('pointerup', () => this.endHold());
+    window.addEventListener('pointercancel', () => this.endHold());
     DARK_SCHEME.addEventListener('change', () => {
       if (this.cyInstance !== null) {
         this.cyInstance.style(stylesheet(this.showLoose));
@@ -178,6 +202,7 @@ export class GraphView implements View {
         pixelRatio: Math.min(window.devicePixelRatio, 2),
       });
       cy.on('tap', 'node.person', (event) => {
+        if (performance.now() - this.holdEndedAt < TAP_AFTER_HOLD_MS) return;
         const id = (event.target as NodeSingular).id();
         haptic();
         this.dismissCoach();
@@ -189,6 +214,8 @@ export class GraphView implements View {
           this.show(null);
         }
       });
+      cy.on('taphold', 'node.person', (event) => this.startHold((event.target as NodeSingular).id()));
+      cy.on('tapend', () => this.endHold());
       cy.on('mouseover', 'node.person', (event) => {
         const node = event.target as NodeSingular;
         node.addClass('hover');
@@ -211,12 +238,16 @@ export class GraphView implements View {
     if (this.highlight?.kind === 'group' && !this.ctx.store.groups.has(this.highlight.groupId)) {
       this.highlight = null;
     }
+    if ((this.highlight?.kind === 'person' || this.highlight?.kind === 'shared') && !this.ctx.store.people.has(this.highlight.personId)) {
+      this.highlight = null;
+    }
     this.syncElements();
     this.renderChips();
     this.renderTools();
     this.renderFab();
     this.renderEmpty();
     this.renderA11yList();
+    this.renderSharedBanner();
     this.applyHighlight(false);
     if (this.isVisible() && this.layoutNeeded) {
       if (this.hasLaidOut) this.scheduleLayout();
@@ -234,13 +265,70 @@ export class GraphView implements View {
     void this.pulseMe();
   }
 
-  show(highlight: Highlight | null): void {
+  show(highlight: Highlight | null, moveCamera = true): void {
     this.highlight = highlight;
     this.renderChips();
     this.renderTools();
+    this.renderSharedBanner();
     if (this.isVisible()) {
-      this.applyHighlight(true);
+      this.applyHighlight(moveCamera);
     }
+  }
+
+  /** Press and hold a person: only the people we both know stay on screen until the finger lifts. */
+  private startHold(personId: string): void {
+    const store = this.ctx.store;
+    if (personId === store.meId || this.hold !== null) return;
+    haptic([10, 30, 10]);
+    this.dismissCoach();
+    const targets = this.sharedArrangement(personId);
+    const positions = new Map([...targets.keys()].map((id) => [id, { ...this.cy.getElementById(id).position() }]));
+    this.hold = { highlight: this.highlight, zoom: this.cy.zoom(), pan: { ...this.cy.pan() }, positions };
+    this.show({ kind: 'shared', personId }, false);
+    this.moveNodes(targets, true);
+  }
+
+  private endHold(): void {
+    const hold = this.hold;
+    if (hold === null) return;
+    this.hold = null;
+    this.holdEndedAt = performance.now();
+    this.show(hold.highlight, false);
+    this.moveNodes(hold.positions, false);
+    this.cy.animate({ zoom: hold.zoom, pan: hold.pan, duration: duration(DURATION.base), easing: 'ease-out' });
+  }
+
+  /** Me and the held person side by side; the people we both know around us, grouped people together. */
+  private sharedArrangement(personId: string): Map<string, cytoscape.Position> {
+    const store = this.ctx.store;
+    const center = { ...this.cy.getElementById(store.meId).position() };
+    const groupName = (id: string): string => {
+      const groupId = store.person(id).groupIds[0];
+      return groupId === undefined ? '' : store.group(groupId).name;
+    };
+    const shared = sharedBetween(store, store.meId, personId).sort(
+      (a, b) => groupName(a).localeCompare(groupName(b)) || store.person(a).name.localeCompare(store.person(b).name),
+    );
+    return new Map([
+      [store.meId, { x: center.x - PAIR_GAP, y: center.y }],
+      [personId, { x: center.x + PAIR_GAP, y: center.y }],
+      ...shared.map((id, i): [string, cytoscape.Position] => [id, spiralPosition(center, SHARED_INNER_RADIUS, SHARED_SPACING, i)]),
+    ]);
+  }
+
+  private moveNodes(positions: Map<string, cytoscape.Position>, fit: boolean): void {
+    this.holdLayout?.stop();
+    const nodes = this.cy.nodes().filter((node) => positions.has(node.id()));
+    this.holdLayout = nodes.layout({
+      name: 'preset',
+      positions: (node: NodeSingular) => positions.get(node.id()) as cytoscape.Position,
+      animate: !prefersReducedMotion(),
+      animationDuration: DURATION.base,
+      animationEasing: 'ease-out',
+      fit,
+      padding: 48,
+    } as cytoscape.LayoutOptions);
+    this.holdLayout.run();
   }
 
   private isVisible(): boolean {
@@ -370,11 +458,7 @@ export class GraphView implements View {
     const centerX = (box.x1 + box.x2) / 2;
     const centerY = (box.y1 + box.y2) / 2;
     const innerRadius = Math.max(box.w, box.h) / 2 + 70;
-    loose.positions((_node, i) => {
-      const radius = innerRadius + SPIRAL_SPACING * Math.sqrt(i);
-      const angle = i * GOLDEN_ANGLE;
-      return { x: centerX + radius * Math.cos(angle), y: centerY + radius * Math.sin(angle) };
-    });
+    loose.positions((_node, i) => spiralPosition({ x: centerX, y: centerY }, innerRadius, SPIRAL_SPACING, i));
   }
 
   private isInView(elements: NodeCollection): boolean {
@@ -540,6 +624,21 @@ export class GraphView implements View {
     );
   }
 
+  /** "Only what you and Noa share · 113" while a person is held. */
+  private renderSharedBanner(): void {
+    const highlight = this.highlight;
+    this.sharedBanner.hidden = highlight?.kind !== 'shared';
+    replaceChildren(
+      this.sharedBanner,
+      highlight?.kind !== 'shared'
+        ? null
+        : t('sharedOnly', {
+            name: this.ctx.store.person(highlight.personId).name,
+            count: sharedBetween(this.ctx.store, this.ctx.store.meId, highlight.personId).length,
+          }),
+    );
+  }
+
   private dismissCoach(): void {
     window.localStorage.setItem(COACH_KEY, '1');
     this.coachLayer.replaceChildren();
@@ -607,7 +706,7 @@ export class GraphView implements View {
     const cy = this.cy;
     this.staggerTimers.forEach((timer) => window.clearTimeout(timer));
     this.staggerTimers = [];
-    cy.elements('.faded, .highlight').removeClass('faded highlight');
+    cy.elements('.faded, .highlight, .gone').removeClass('faded highlight gone');
 
     const highlight = this.highlight;
     let focus: Collection = cy.collection();
@@ -621,6 +720,11 @@ export class GraphView implements View {
     } else if (highlight?.kind === 'group') {
       const members = this.groupMembers(highlight.groupId);
       focus = members.union(members.edgesWith(members).filter('.relation'));
+    } else if (highlight?.kind === 'shared') {
+      const store = this.ctx.store;
+      const ids = new Set([store.meId, highlight.personId, ...sharedBetween(store, store.meId, highlight.personId)]);
+      const people = cy.nodes('.person').filter((node) => ids.has(node.id()));
+      focus = people.union(people.edgesWith(people).filter('.relation'));
     } else if (highlight?.kind === 'person') {
       focus = cy
         .getElementById(highlight.personId)
@@ -629,9 +733,11 @@ export class GraphView implements View {
     }
 
     if (focus.nonempty()) {
-      cy.elements('.person, .relation').difference(focus).addClass('faded');
+      cy.elements('.person, .relation').difference(focus).addClass(highlight?.kind === 'shared' ? 'gone' : 'faded');
       if (highlight?.kind === 'path' && !prefersReducedMotion()) {
         ordered.forEach((element, i) => this.staggerTimers.push(window.setTimeout(() => element.addClass('highlight'), i * PATH_STAGGER_MS)));
+      } else if (highlight?.kind === 'shared') {
+        cy.getElementById(highlight.personId).addClass('highlight');
       } else if (highlight?.kind !== 'group') {
         focus.addClass('highlight');
       }

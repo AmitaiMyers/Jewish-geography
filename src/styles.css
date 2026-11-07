@@ -1054,6 +1054,30 @@ dialog.sheet[data-snap='peek']::backdrop {
   inset: 0;
 }
 
+.graph-canvas {
+  /* a long press holds a person (see GraphView.startHold): no callout or text selection */
+  -webkit-touch-callout: none;
+  user-select: none;
+  touch-action: none;
+}
+
+.graph-banner {
+  position: absolute;
+  top: 60px;
+  inset-inline: var(--space-4);
+  width: fit-content;
+  max-width: calc(100% - 2 * var(--space-4));
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font: var(--text-label);
+  box-shadow: var(--shadow-2);
+  pointer-events: none;
+  animation: pop-in var(--dur-base) var(--ease-spring);
+}
+
 .graph-hull {
   /* explicit size: an unsized <svg> is 300px wide and, in RTL, pins to the right edge */
   width: 100%;

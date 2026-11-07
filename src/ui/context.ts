@@ -11,7 +11,9 @@ export type TabName = 'graph' | 'people' | 'connect' | 'me';
 export type Highlight =
   | { kind: 'path'; path: Path }
   | { kind: 'group'; groupId: string }
-  | { kind: 'person'; personId: string };
+  | { kind: 'person'; personId: string }
+  /** Only me, this person and the people we both know; everyone else is removed from view. */
+  | { kind: 'shared'; personId: string };
 
 export interface AppContext {
   store: AppStore;

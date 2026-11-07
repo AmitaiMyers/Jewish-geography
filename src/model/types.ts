@@ -100,6 +100,8 @@ export type EndpointChoice = { personId: string } | { newPersonName: string };
 export interface Settings {
   meId: string;
   language: Language;
+  /** Keys (see `suggestionKey`) of suggestions the user discarded, so "Look again" does not bring them back. */
+  dismissedSuggestions: string[];
 }
 
 export type Language = 'en' | 'he';

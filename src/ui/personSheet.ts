@@ -73,6 +73,7 @@ export class PersonSheet {
     const person = store.person(this.personId as string);
     const isMe = person.id === store.meId;
     const relation = relationToMeText(store, person);
+    const shared = isMe ? 0 : sharedBetween(store, store.meId, person.id).length;
 
     this.sheet.setTitle(person.name);
     this.sheet.setBody(
@@ -94,7 +95,8 @@ export class PersonSheet {
             h('p', { class: 'caption nums' }, tCount('connectionsCount', store.index.degree(person.id))),
           ),
         ),
-        this.quickActions(person, isMe),
+        this.quickActions(person, isMe, shared),
+        shared === 0 ? null : h('p', { class: 'caption' }, t('holdHint', { name: person.name })),
         this.groupToggles(person),
         this.connectionList(person),
         this.addConnectionForm(person),
@@ -103,9 +105,8 @@ export class PersonSheet {
     );
   }
 
-  private quickActions(person: Person, isMe: boolean): HTMLElement {
+  private quickActions(person: Person, isMe: boolean, shared: number): HTMLElement {
     const store = this.ctx.store;
-    const shared = isMe ? 0 : sharedBetween(store, store.meId, person.id).length;
     return h(
       'div',
       { class: 'row' },
