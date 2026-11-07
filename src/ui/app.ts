@@ -114,6 +114,14 @@ export class App implements AppContext {
     toast(name, { success: true });
   }
 
+  async rescanNames(): Promise<void> {
+    const result = await this.store.rescanNames(t('servicesGroup'));
+    toast(t('rescanDone', { groups: result.groups, suggested: result.suggested }), {
+      success: true,
+      action: result.suggested > 0 ? { label: t('review'), run: () => this.openSuggestions() } : undefined,
+    });
+  }
+
   async deleteWithUndo(message: string, run: () => Promise<Snapshot>): Promise<void> {
     const snapshot = await run();
     haptic();

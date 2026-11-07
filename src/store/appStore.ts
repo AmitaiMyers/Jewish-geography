@@ -1,13 +1,14 @@
 import type { IDBPDatabase } from 'idb';
 import { GraphIndex } from '../graph/graphIndex';
 import { classifyWalk, familyWalksFrom, type Kinship } from '../graph/kinship';
-import { jointSuggestions, splitJointContact, suggestionsFromName } from '../importers/nameHints';
+import { jointSuggestions, splitEvidence, splitJointContact, suggestionsFromName } from '../importers/nameHints';
 import type { RawContact } from '../importers/rawContact';
 import { assert, newId, required } from '../model/assert';
 import { nextGroupColor } from '../model/groupColors';
+import { normalizeName } from '../model/identity';
 import { planNameGroups } from '../model/nameGroups';
 import { relationProblem } from '../model/relationRules';
-import type { EndpointChoice, Gender, Group, Language, Person, PersonSource, Relation, RelationType, Settings, Suggestion } from '../model/types';
+import type { EndpointChoice, FamilyKind, Gender, Group, Language, Person, PersonSource, Relation, RelationType, Settings, Suggestion } from '../model/types';
 import { DATA_STORES, openDatabase, type GeographyDB } from './db';
 import { parseBackup, type Backup } from './backup';
 
@@ -68,9 +69,33 @@ export interface ImportResult {
 
 type Listener = () => void;
 
-/** Suggestions saved before ambiguous names were supported have no `unresolved` field: they were all resolved. */
-function withUnresolvedField(suggestion: Suggestion): Suggestion {
-  return 'unresolved' in suggestion ? suggestion : { ...(suggestion as Omit<Suggestion, 'unresolved'>), unresolved: null };
+/**
+ * Data saved by earlier versions lacks newer fields; fill them with what was true then
+ * (suggestions were all resolved and never asked for a kind; nobody had other names).
+ */
+function upgradeSuggestion(suggestion: Suggestion): Suggestion {
+  const saved = suggestion as Partial<Suggestion> & Omit<Suggestion, 'unresolved' | 'askKind'>;
+  return { ...saved, unresolved: saved.unresolved ?? null, askKind: saved.askKind ?? false };
+}
+
+function unique<T>(values: readonly T[]): T[] {
+  return [...new Set(values)];
+}
+
+/** Me, with another person's identifiers and (if new) their name added as another name of mine. */
+function withIdentityOf(me: Person, name: string, phones: readonly string[], emails: readonly string[]): Person {
+  const isNewName = normalizeName(name) !== normalizeName(me.name) && !me.otherNames.some((other) => normalizeName(other) === normalizeName(name));
+  return {
+    ...me,
+    phones: unique([...me.phones, ...phones]),
+    emails: unique([...me.emails, ...emails]),
+    otherNames: isNewName ? [...me.otherNames, name] : me.otherNames,
+  };
+}
+
+function upgradePerson(person: Person): Person {
+  const saved = person as Partial<Person> & Omit<Person, 'otherNames'>;
+  return { ...saved, otherNames: saved.otherNames ?? [] };
 }
 
 export class AppStore {
@@ -298,11 +323,17 @@ export class AppStore {
     const draft = (contact: RawContact): Person =>
       this.buildPerson({ ...contact, gender: 'unknown', groupIds: options.groupId === null ? [] : [options.groupId], notes: '', source });
 
+    let me = this.person(this.meId);
+    const evidence = splitEvidence([...contacts.map((contact) => contact.name), ...[...this.people.values()].map((person) => person.name)], me);
     const added: Person[] = [];
     const jointSuggestionList: Suggestion[] = [];
     const singles: Person[] = [];
     for (const contact of contacts) {
-      const joint = splitJointContact(contact);
+      if (this.isMe(contact)) {
+        me = withIdentityOf(me, contact.name, contact.phones, contact.emails);
+        continue;
+      }
+      const joint = splitJointContact(contact, evidence);
       if (joint === null) {
         const person = draft(contact);
         added.push(person);
@@ -311,13 +342,70 @@ export class AppStore {
         const first = draft(joint.first);
         const second = draft(joint.second);
         added.push(first, second);
+        singles.push(first, second); // their new names may carry hints too ("פני מיירס" shares my surname)
         jointSuggestionList.push(...jointSuggestions(first, second, joint.role, contact.name, this.meId));
       }
     }
     added.forEach((person) => this.people.set(person.id, person));
+    this.people.set(me.id, me);
 
-    const scan = await this.commitNameScan(added, jointSuggestionList, singles, options.servicesGroupName);
+    const scan = await this.commitNameScan([...added, me], jointSuggestionList, singles, options.servicesGroupName);
     return { added: added.length, ...scan };
+  }
+
+  /**
+   * A contact is me when it carries one of my names ("אמיתי מיירס"). A shared phone is not enough:
+   * family members share a home landline. Anything else is merged by hand ("This is me").
+   */
+  private isMe(contact: { name: string }): boolean {
+    const me = this.person(this.meId);
+    const wanted = normalizeName(contact.name);
+    return [me.name, ...me.otherNames].some((name) => normalizeName(name) === wanted);
+  }
+
+  /**
+   * "This is me": folds a duplicate of me into my own node. Its phones, emails, groups and name
+   * (as another name of mine) move to me; its connections are re-pointed to me. Cannot be undone.
+   */
+  async mergeIntoMe(personId: string): Promise<void> {
+    await this.applyMergeIntoMe(personId);
+    this.changed();
+  }
+
+  private async applyMergeIntoMe(personId: string): Promise<void> {
+    assert(personId !== this.meId, 'cannot merge me into myself');
+    const duplicate = this.person(personId);
+    const me = withIdentityOf({ ...this.person(this.meId), groupIds: unique([...this.person(this.meId).groupIds, ...duplicate.groupIds]) }, duplicate.name, duplicate.phones, duplicate.emails);
+    const merged: Person = { ...me, otherNames: unique([...me.otherNames, ...duplicate.otherNames]) };
+
+    const touching = [...this.relations.values()].filter((r) => r.from === personId || r.to === personId);
+    const kept = [...this.relations.values()].filter((r) => r.from !== personId && r.to !== personId);
+    const repointed: Relation[] = [];
+    for (const relation of touching) {
+      const moved: Relation = {
+        ...relation,
+        id: newId(),
+        from: relation.from === personId ? this.meId : relation.from,
+        to: relation.to === personId ? this.meId : relation.to,
+      };
+      if (relationProblem(moved, [...kept, ...repointed]) === null) repointed.push(moved);
+    }
+    const staleSuggestions = [...this.suggestions.values()].filter((x) => [x.from, x.to, x.subjectId].includes(personId));
+
+    const tx = this.db.transaction(['people', 'relations', 'suggestions'], 'readwrite');
+    await Promise.all([
+      tx.objectStore('people').put(merged),
+      tx.objectStore('people').delete(personId),
+      ...touching.map((r) => tx.objectStore('relations').delete(r.id)),
+      ...repointed.map((r) => tx.objectStore('relations').put(r)),
+      ...staleSuggestions.map((x) => tx.objectStore('suggestions').delete(x.id)),
+      tx.done,
+    ]);
+    this.people.set(merged.id, merged);
+    this.people.delete(personId);
+    touching.forEach((r) => this.relations.delete(r.id));
+    repointed.forEach((r) => this.relations.set(r.id, r));
+    staleSuggestions.forEach((x) => this.suggestions.delete(x.id));
   }
 
   /**
@@ -326,12 +414,33 @@ export class AppStore {
    * wrongly); links that already exist are not suggested again.
    */
   async rescanNames(servicesGroupName: string): Promise<Omit<ImportResult, 'added'>> {
-    const stale = [...this.suggestions.values()];
+    for (const duplicate of [...this.people.values()].filter((person) => person.id !== this.meId && this.isMe(person))) {
+      await this.applyMergeIntoMe(duplicate.id);
+    }
+    // Only suggestions that came from a person's current name are re-derived (older rules may have read
+    // them wrongly); ones from a split contact ("פני וגרי סבא וסבתא") cannot be re-derived, so they stay.
+    const stale = [...this.suggestions.values()].filter((x) => this.people.get(x.subjectId)?.name === x.evidence);
     const tx = this.db.transaction('suggestions', 'readwrite');
     await Promise.all([...stale.map((suggestion) => tx.store.delete(suggestion.id)), tx.done]);
     stale.forEach((suggestion) => this.suggestions.delete(suggestion.id));
+
+    // Contacts imported before two-person names were split ("מיירס פני וג'רי") are split now:
+    // the existing node keeps its links and becomes the first person.
+    const evidence = splitEvidence([...this.people.values()].map((person) => person.name), this.person(this.meId));
+    const changedPeople: Person[] = [];
+    const jointSuggestionList: Suggestion[] = [];
+    for (const person of [...this.people.values()].filter((p) => p.id !== this.meId)) {
+      const joint = splitJointContact(person, evidence);
+      if (joint === null) continue;
+      const first: Person = { ...person, name: joint.first.name, otherNames: unique([...person.otherNames, person.name]) };
+      const second = this.buildPerson({ ...joint.second, gender: 'unknown', groupIds: person.groupIds, notes: '', source: person.source });
+      this.people.set(first.id, first);
+      this.people.set(second.id, second);
+      changedPeople.push(first, second);
+      jointSuggestionList.push(...jointSuggestions(first, second, joint.role, person.name, this.meId));
+    }
     const subjects = [...this.people.values()].filter((person) => person.id !== this.meId);
-    return this.commitNameScan([], [], subjects, servicesGroupName);
+    return this.commitNameScan([...changedPeople, this.person(this.meId)], jointSuggestionList, subjects, servicesGroupName);
   }
 
   /** Name-based suggestions for `subjects` plus label/services groups for everyone, written with `newPeople` in one transaction. */
@@ -378,10 +487,19 @@ export class AppStore {
    * Applies the gender hint, adds the link and removes the suggestion — one transaction, one re-render.
    * An unresolved suggestion needs `choice`: the person the contact meant, or a new person to add.
    */
-  async acceptSuggestion(id: string, choice: EndpointChoice | null): Promise<void> {
+  async acceptSuggestion(id: string, choice: EndpointChoice | null, kind: FamilyKind | null): Promise<void> {
     const suggestion = required(this.suggestions.get(id), `suggestion ${id}`);
     let from = suggestion.from;
     let to = suggestion.to;
+    let type = suggestion.type;
+    if (suggestion.askKind) {
+      assert(kind !== null, 'choose how you are related first');
+      // The subject is `from`, I am `to`: "my child" turns the parent link around.
+      if (kind === 'child') [from, to] = [to, from];
+      type = kind === 'child' ? 'parent' : kind;
+    } else {
+      assert(kind === null, 'this suggestion does not ask for a relation');
+    }
     let newPerson: Person | null = null;
     if (suggestion.unresolved === null) {
       assert(choice === null, 'this suggestion is already resolved');
@@ -402,7 +520,7 @@ export class AppStore {
     const subject = this.person(suggestion.subjectId);
     const updatedSubject =
       subject.gender === 'unknown' && suggestion.genderHint !== 'unknown' ? { ...subject, gender: suggestion.genderHint } : null;
-    const draft = { from, to, type: suggestion.type, label: suggestion.label.trim() };
+    const draft = { from, to, type, label: type === 'relative' || type === 'custom' ? suggestion.label.trim() : '' };
     const relation: Relation | null = relationProblem(draft, this.relations.values()) === null ? { id: newId(), ...draft, createdAt: Date.now() } : null;
 
     const tx = this.db.transaction(['people', 'relations', 'suggestions'], 'readwrite');
@@ -503,16 +621,17 @@ export class AppStore {
     this.relations.clear();
     this.groups.clear();
     this.suggestions.clear();
-    data.people.forEach((p) => this.people.set(p.id, p));
+    data.people.forEach((p) => this.people.set(p.id, upgradePerson(p)));
     data.relations.forEach((r) => this.relations.set(r.id, r));
     data.groups.forEach((g) => this.groups.set(g.id, g));
-    data.suggestions.forEach((s) => this.suggestions.set(s.id, withUnresolvedField(s)));
+    data.suggestions.forEach((s) => this.suggestions.set(s.id, upgradeSuggestion(s)));
     this.currentSettings = data.settings;
   }
 
   private buildPerson(draft: PersonDraft): Person {
     assert(draft.name.trim() !== '', 'a person needs a name');
-    return { id: newId(), ...draft, name: draft.name.trim(), createdAt: Date.now() };
+    // A newly created person has no other names yet; they are added by merging or editing.
+    return { id: newId(), ...draft, name: draft.name.trim(), otherNames: [], createdAt: Date.now() };
   }
 
   private async putPeople(people: readonly Person[]): Promise<void> {

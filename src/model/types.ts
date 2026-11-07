@@ -13,6 +13,8 @@ export interface Person {
   phones: string[];
   emails: string[];
   groupIds: string[];
+  /** Other ways this person is written ("אמיתי מיירס" for "Amitai Myers", a nickname…). */
+  otherNames: string[];
   notes: string;
   source: PersonSource;
   createdAt: number;
@@ -76,7 +78,12 @@ export interface Suggestion {
    * The endpoint on `side` is '' until the user picks a candidate (or a new person) on the card.
    */
   unresolved: UnresolvedEndpoint | null;
+  /** The name says "family" but not how ("יוני מיירס" shares my surname): the card asks which relation. */
+  askKind: boolean;
 }
+
+/** The relation picked on a card for an `askKind` suggestion, from the subject's point of view to me. */
+export type FamilyKind = 'parent' | 'child' | 'sibling' | 'spouse' | 'relative';
 
 export interface UnresolvedEndpoint {
   side: 'from' | 'to';

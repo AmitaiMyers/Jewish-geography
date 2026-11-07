@@ -16,7 +16,18 @@ import type { RawContact } from './rawContact';
  * Nothing is linked automatically: the user accepts or dismisses each suggestion.
  */
 
-type HintKind = 'parentOfAnchor' | 'childOfAnchor' | 'spouse' | 'sibling' | 'friend' | 'neighbor' | 'work' | 'relative';
+type HintKind =
+  | 'parentOfAnchor'
+  | 'childOfAnchor'
+  | 'spouse'
+  | 'sibling'
+  | 'friend'
+  | 'neighbor'
+  | 'work'
+  | 'army'
+  | 'school'
+  | 'relative'
+  | 'custom';
 
 /** Most candidates shown on a card when a name is ambiguous. */
 const MAX_CANDIDATES = 12;
@@ -27,6 +38,31 @@ interface VocabularyEntry {
   kind: HintKind;
   gender: Gender;
 }
+
+/**
+ * Roles someone has toward me, recognised anywhere in the name:
+ * "המפקד נדב", "גל ברזני מפקד", "סיון מורה ללשון", "רוני הבוס", "ספיר מאמנת".
+ */
+const ROLE_VOCABULARY: Record<string, VocabularyEntry> = {
+  'המפקד': { kind: 'army', gender: 'male' },
+  'מפקד': { kind: 'army', gender: 'male' },
+  'המפקדת': { kind: 'army', gender: 'female' },
+  'מפקדת': { kind: 'army', gender: 'female' },
+  'סגן': { kind: 'army', gender: 'male' },
+  commander: { kind: 'army', gender: 'unknown' },
+  'מורה': { kind: 'school', gender: 'unknown' },
+  'המורה': { kind: 'school', gender: 'unknown' },
+  teacher: { kind: 'school', gender: 'unknown' },
+  'בוס': { kind: 'work', gender: 'unknown' },
+  'הבוס': { kind: 'work', gender: 'unknown' },
+  'מנהל': { kind: 'work', gender: 'male' },
+  'מנהלת': { kind: 'work', gender: 'female' },
+  boss: { kind: 'work', gender: 'unknown' },
+  manager: { kind: 'work', gender: 'unknown' },
+  'מאמן': { kind: 'custom', gender: 'male' },
+  'מאמנת': { kind: 'custom', gender: 'female' },
+  coach: { kind: 'custom', gender: 'unknown' },
+};
 
 // Ambiguous words are deliberately left out: Hebrew "דוד" is also the name David,
 // and "בן"/"בן דוד" are common surname parts (Ben-David).
@@ -71,6 +107,7 @@ const VOCABULARY: Record<string, VocabularyEntry> = {
   colleague: { kind: 'work', gender: 'unknown' },
   'מזכיר': { kind: 'work', gender: 'male' },
   'מזכירה': { kind: 'work', gender: 'female' },
+  ...ROLE_VOCABULARY,
   'חבר': { kind: 'friend', gender: 'male' },
   'חברה': { kind: 'friend', gender: 'female' },
   grandma: { kind: 'relative', gender: 'female' },
@@ -209,7 +246,12 @@ export function parseNameHints(name: string): NameHint[] {
     const words = plain.split(/\s+/);
     const trailing = words.length >= 2 ? trailingWord(plain) : null;
     const isWholeName = trailing !== null && normalizeName(plain) === trailing.word;
-    return trailing === null || isWholeName ? [] : [{ ...trailing, anchorName: null }];
+    if (trailing !== null && !isWholeName) {
+      return [{ ...trailing, anchorName: null }];
+    }
+    // "סיון מורה ללשון": a role word anywhere in the name is that role toward me.
+    const role = words.map((word) => normalizeName(word)).find((word) => word in ROLE_VOCABULARY);
+    return role === undefined ? [] : [{ word: role, entry: ROLE_VOCABULARY[role] as VocabularyEntry, anchorName: null }];
   }
   // "אמא שאול" / "Mom Sarah" is someone else's parent (your own is just "אמא" / "Mom"),
   // whereas "דודה רחל" / "Uncle Moshe" is your relative called Rachel / Moshe.
@@ -264,7 +306,10 @@ function linkFor(kind: HintKind, subjectId: string, anchorId: string): { from: s
     case 'friend':
     case 'neighbor':
     case 'work':
+    case 'army':
+    case 'school':
     case 'relative':
+    case 'custom':
       return { from: subjectId, to: anchorId, type: kind };
   }
 }
@@ -277,17 +322,61 @@ function canCreateAnchor(kind: HintKind, name: string): boolean {
   return (kind === 'parentOfAnchor' || kind === 'childOfAnchor') && !/\s/.test(name.trim());
 }
 
+/** Last words of my names ("Amitai Myers", "אמיתי מיירס" → myers, מיירס): my family's surnames. */
+export function surnamesOf(person: Person): Set<string> {
+  return new Set(
+    [person.name, ...person.otherNames]
+      .map((name) => normalizeName(withoutParentheses(name)).split(' '))
+      .filter((words) => words.length >= 2)
+      .map((words) => words[words.length - 1] as string),
+  );
+}
+
+function isOneOfMyNames(name: string, me: Person): boolean {
+  const wanted = normalizeName(name);
+  return [me.name, ...me.otherNames].some((mine) => normalizeName(mine) === wanted);
+}
+
+/** "יוני מיירס" shares my surname: family, but the name does not say how — the card will ask. */
+function familyBySurname(subject: Person, me: Person): Suggestion | null {
+  const words = normalizeName(withoutParentheses(subject.name)).split(' ');
+  const surname = words[words.length - 1] as string;
+  if (words.length < 2 || !surnamesOf(me).has(surname) || isOneOfMyNames(subject.name, me)) {
+    return null;
+  }
+  const isHebrew = /[\u0590-\u05ff]/.test(surname);
+  return {
+    id: newId(),
+    from: subject.id,
+    to: me.id,
+    type: 'relative',
+    label: isHebrew ? `משפחת ${surname}` : `${capitalize(surname)} family`,
+    subjectId: subject.id,
+    genderHint: 'unknown',
+    evidence: subject.name,
+    unresolved: null,
+    askKind: true,
+  };
+}
+
 export function suggestionsFromName(subject: Person, people: readonly Person[], meId: string): Suggestion[] {
   if (subject.id === meId) {
     return [];
   }
-  return parseNameHints(subject.name).flatMap((hint): Suggestion[] => {
+  const hints = parseNameHints(subject.name);
+  if (hints.length === 0) {
+    const me = people.find((person) => person.id === meId);
+    const byFamily = me === undefined ? null : familyBySurname(subject, me);
+    return byFamily === null ? [] : [byFamily];
+  }
+  return hints.flatMap((hint): Suggestion[] => {
     const base = {
       id: newId(),
-      label: hint.entry.kind === 'relative' ? capitalize(hint.word) : '',
+      label: hint.entry.kind === 'relative' || hint.entry.kind === 'custom' ? capitalize(hint.word) : '',
       subjectId: subject.id,
       genderHint: hint.entry.gender,
       evidence: subject.name,
+      askKind: false,
     };
     if (hint.anchorName === null) {
       return [{ ...base, ...linkFor(hint.entry.kind, subject.id, meId), unresolved: null }];
@@ -317,31 +406,75 @@ export function suggestionsFromName(subject: Person, people: readonly Person[], 
 export interface JointContact {
   first: RawContact;
   second: RawContact;
-  /** The shared relation as written, e.g. "סבא וסבתא". */
-  role: string;
+  /** The shared relation to me as written ("סבא וסבתא"), or null when the name only says they are a couple. */
+  role: string | null;
 }
 
-const JOINT_NAME = /^(\S+)\s+ו(\S+)\s+(\S+)\s+ו(\S+)$/u;
+const JOINT_KINSHIP = /^(\S+)\s+ו(\S+)\s+(\S+)\s+ו(\S+)$/u;
+
+/** What the rest of the address book tells us about words, for deciding whether "X וY" is two people. */
+export interface SplitEvidence {
+  /** How many contacts start with each normalised word: those words are first names. */
+  firstNames: ReadonlyMap<string, number>;
+  /** My family's surnames (from all my names). */
+  familySurnames: ReadonlySet<string>;
+}
 
 /**
- * "פני וגרי סבא וסבתא" → Penny and Gary, my grandparents (and a couple).
- * Deliberately strict — both trailing words must be kinship words — so surnames
- * starting with ו ("יואב וולף") are never split.
+ * One contact, two people:
+ *   "פני וגרי סבא וסבתא" → Penny and Gary, my grandparents (and a couple);
+ *   "מיירס פני וג'רי" → a couple of my family; "דני ורונית כהן" → a couple, when both are known first names.
+ * Many surnames start with ו (וייס, וולף, וינשטיין), so "X וY" is only split when Y is the first name
+ * of another contact as well as X, or when the rest of the name is my own family's surname.
  */
-export function splitJointContact(contact: RawContact): JointContact | null {
-  const match = JOINT_NAME.exec(contact.name.trim());
-  if (match === null || lookup(match[3] as string) === null || lookup(match[4] as string) === null) {
+export function splitJointContact(contact: RawContact, evidence: SplitEvidence): JointContact | null {
+  const name = contact.name.trim();
+  const kinship = JOINT_KINSHIP.exec(name);
+  if (kinship !== null && lookup(kinship[3] as string) !== null && lookup(kinship[4] as string) !== null) {
+    return {
+      first: { name: kinship[1] as string, phones: contact.phones, emails: contact.emails },
+      second: { name: kinship[2] as string, phones: [], emails: [] },
+      role: `${kinship[3] as string} ו${kinship[4] as string}`,
+    };
+  }
+
+  const words = name.split(/\s+/);
+  const joinIndexes = words.map((word, i) => (i > 0 && /^ו[\p{L}]/u.test(word) ? i : -1)).filter((i) => i !== -1);
+  if (words.length < 2 || words.length > 4 || joinIndexes.length !== 1 || /\d/.test(name) || parseNameHints(name).length > 0) {
     return null;
   }
+  const join = joinIndexes[0] as number;
+  const firstName = words[join - 1] as string;
+  const secondName = (words[join] as string).slice(1);
+  const shared = words.filter((_, i) => i !== join && i !== join - 1).join(' ');
+  const isKnownFirstName = (word: string): boolean => (evidence.firstNames.get(normalizeName(word)) ?? 0) > 0;
+  const bothFirstNames = isKnownFirstName(firstName) && isKnownFirstName(secondName);
+  const isMyFamily = shared !== '' && evidence.familySurnames.has(normalizeName(shared));
+  if (!bothFirstNames && !isMyFamily) {
+    return null;
+  }
+  const full = (given: string): string => (shared === '' ? given : `${given} ${shared}`);
   return {
-    first: { name: match[1] as string, phones: contact.phones, emails: contact.emails },
-    second: { name: match[2] as string, phones: [], emails: [] },
-    role: `${match[3] as string} ו${match[4] as string}`,
+    first: { name: full(firstName), phones: contact.phones, emails: contact.emails },
+    second: { name: full(secondName), phones: [], emails: [] },
+    role: null,
   };
 }
 
-/** Suggestions for a split contact: each is my relative ("סבא וסבתא"), and they are a couple. */
-export function jointSuggestions(first: Person, second: Person, role: string, evidence: string, meId: string): Suggestion[] {
+/** Evidence for splitJointContact from every name in the address book and my own names. */
+export function splitEvidence(names: readonly string[], me: Person): SplitEvidence {
+  const firstNames = new Map<string, number>();
+  for (const name of names) {
+    const words = normalizeName(name).split(' ');
+    if (words.length > 1) {
+      firstNames.set(words[0] as string, (firstNames.get(words[0] as string) ?? 0) + 1);
+    }
+  }
+  return { firstNames, familySurnames: surnamesOf(me) };
+}
+
+/** Suggestions for a split contact: a couple, and (when the name says so) both my relatives. */
+export function jointSuggestions(first: Person, second: Person, role: string | null, evidence: string, meId: string): Suggestion[] {
   const make = (from: string, to: string, type: RelationType, label: string, subjectId: string): Suggestion => ({
     id: newId(),
     from,
@@ -352,10 +485,10 @@ export function jointSuggestions(first: Person, second: Person, role: string, ev
     genderHint: 'unknown',
     evidence,
     unresolved: null,
+    askKind: false,
   });
   return [
-    make(first.id, meId, 'relative', role, first.id),
-    make(second.id, meId, 'relative', role, second.id),
+    ...(role === null ? [] : [make(first.id, meId, 'relative', role, first.id), make(second.id, meId, 'relative', role, second.id)]),
     make(first.id, second.id, 'spouse', '', first.id),
   ];
 }

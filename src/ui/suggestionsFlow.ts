@@ -1,5 +1,6 @@
 import { relationLabelFrom, t } from '../i18n/i18n';
-import type { EndpointChoice, Suggestion, UnresolvedEndpoint } from '../model/types';
+import type { StringKey } from '../i18n/strings';
+import type { EndpointChoice, FamilyKind, Suggestion, UnresolvedEndpoint } from '../model/types';
 import { avatar } from './avatar';
 import { JgSheet } from './components/sheet';
 import { groupColors, type AppContext } from './context';
@@ -9,10 +10,42 @@ import { duration, DURATION, haptic, shake, wait } from './motion';
 
 const SWIPE_THRESHOLD = 90;
 const NEW_PERSON = '__new__';
+const FAMILY_KINDS: readonly { kind: FamilyKind; label: StringKey }[] = [
+  { kind: 'parent', label: 'kindParent' },
+  { kind: 'child', label: 'kindChild' },
+  { kind: 'sibling', label: 'kindSibling' },
+  { kind: 'spouse', label: 'kindSpouse' },
+  { kind: 'relative', label: 'kindRelative' },
+];
+
+/** What the user has picked on the current card; a card is ready when everything it asks for is answered. */
+interface Answers {
+  endpoint: EndpointChoice | null;
+  kind: FamilyKind | null;
+}
+
+function isReady(suggestion: Suggestion, answers: Answers): boolean {
+  return (suggestion.unresolved === null || answers.endpoint !== null) && (!suggestion.askKind || answers.kind !== null);
+}
+
+/** A labelled radio group: each option is a row with any content; `onPick` gets the chosen value. */
+function radioGroup(legend: string, options: { value: string; content: (Node | string)[]; checked: boolean }[], onPick: (value: string) => void): HTMLElement {
+  const name = uniqueId('choice');
+  return h(
+    'fieldset',
+    { class: 'stack', style: 'border:none;padding:0;margin:0;width:100%;text-align:start;gap:0' },
+    h('legend', { class: 'label', style: 'margin-bottom:4px' }, legend),
+    ...options.map((option) => {
+      const radio = h('input', { type: 'radio', name, value: option.value, checked: option.checked });
+      radio.addEventListener('change', () => onPick(option.value));
+      return h('label', { class: 'list-row' }, radio, ...option.content);
+    }),
+  );
+}
 
 /**
  * Reviews suggested links one card at a time: swipe right / Accept, swipe left / Skip.
- * When the named person is ambiguous ("אמא של רז") the card asks "Which Raz?" first.
+ * A card may first ask "Which Raz?" (ambiguous name) and/or "How is Yoni Myers related to you?" (shared surname).
  */
 export function openSuggestionCards(ctx: AppContext): void {
   const store = ctx.store;
@@ -23,9 +56,9 @@ export function openSuggestionCards(ctx: AppContext): void {
   let busy = false;
   sheet.setTitle(t('suggestionsTitle'));
 
-  const decide = async (suggestion: Suggestion, accept: boolean, choice: EndpointChoice | null, card: HTMLElement, direction: 1 | -1): Promise<void> => {
+  const decide = async (suggestion: Suggestion, accept: boolean, answers: Answers, card: HTMLElement, direction: 1 | -1): Promise<void> => {
     if (busy) return;
-    if (accept && suggestion.unresolved !== null && choice === null) {
+    if (accept && !isReady(suggestion, answers)) {
       card.style.transition = `transform ${duration(DURATION.base)}ms cubic-bezier(.34,1.56,.64,1)`;
       card.style.transform = '';
       shake(card);
@@ -40,7 +73,7 @@ export function openSuggestionCards(ctx: AppContext): void {
     await wait(duration(DURATION.base));
     reviewed++;
     if (accept) {
-      await store.acceptSuggestion(suggestion.id, choice);
+      await store.acceptSuggestion(suggestion.id, answers.endpoint, suggestion.askKind ? answers.kind : null);
     } else {
       await store.dismissSuggestion(suggestion.id);
     }
@@ -57,8 +90,10 @@ export function openSuggestionCards(ctx: AppContext): void {
     }
     const suggestion = next.value;
     const unresolved = suggestion.unresolved;
-    let choice: EndpointChoice | null =
-      unresolved !== null && unresolved.candidateIds.length === 0 && unresolved.canCreate ? { newPersonName: unresolved.name } : null;
+    const answers: Answers = {
+      endpoint: unresolved !== null && unresolved.candidateIds.length === 0 && unresolved.canCreate ? { newPersonName: unresolved.name } : null,
+      kind: null,
+    };
 
     const endpoint = (side: 'from' | 'to'): { name: string; node: HTMLElement } => {
       if (unresolved !== null && unresolved.side === side) {
@@ -69,7 +104,40 @@ export function openSuggestionCards(ctx: AppContext): void {
     };
     const from = endpoint('from');
     const to = endpoint('to');
-    const accept = h('button', { class: 'btn btn-primary', disabled: unresolved !== null && choice === null }, t('accept'));
+    const accept = h('button', { class: 'btn btn-primary', disabled: !isReady(suggestion, answers) }, t('accept'));
+    const refresh = (): void => {
+      accept.disabled = !isReady(suggestion, answers);
+    };
+
+    const whoChooser = (pending: UnresolvedEndpoint): HTMLElement => {
+      const candidates = pending.candidateIds.map((id) => store.person(id));
+      return radioGroup(
+        t('whichPerson', { name: pending.name }),
+        [
+          ...candidates.map((person) => ({
+            value: person.id,
+            content: [avatar(person.name, groupColors(store, person), 'sm'), h('span', { class: 'grow ellipsis' }, bdi(person.name))],
+            checked: false,
+          })),
+          ...(pending.canCreate
+            ? [{ value: NEW_PERSON, content: [avatar(pending.name, [], 'sm'), h('span', { class: 'grow' }, t('someoneNew', { name: pending.name }))], checked: candidates.length === 0 }]
+            : []),
+        ],
+        (value) => {
+          answers.endpoint = value === NEW_PERSON ? { newPersonName: pending.name } : { personId: value };
+          refresh();
+        },
+      );
+    };
+    const kindChooser = (): HTMLElement =>
+      radioGroup(
+        t('howRelated', { name: from.name }),
+        FAMILY_KINDS.map(({ kind, label }) => ({ value: kind, content: [h('span', { class: 'grow' }, t(label))], checked: false })),
+        (value) => {
+          answers.kind = value as FamilyKind;
+          refresh();
+        },
+      );
 
     const card = h(
       'div',
@@ -81,51 +149,28 @@ export function openSuggestionCards(ctx: AppContext): void {
         { class: 'big-answer' },
         bdi(from.name),
         ' · ',
-        h('span', { class: 'tag tag-family' }, relationLabelFrom({ ...suggestion, createdAt: 0 }, suggestion.from)),
+        h('span', { class: 'tag tag-family' }, suggestion.askKind ? suggestion.label : relationLabelFrom({ ...suggestion, createdAt: 0 }, suggestion.from)),
         ' · ',
         bdi(to.name),
       ),
       h('p', { class: 'caption' }, t('suggestionReason', { evidence: suggestion.evidence })),
-      unresolved === null ? null : chooser(unresolved),
+      unresolved === null ? null : whoChooser(unresolved),
+      suggestion.askKind ? kindChooser() : null,
     );
 
-    function chooser(pending: UnresolvedEndpoint): HTMLElement {
-      const name = pending.name;
-      const group = uniqueId('who');
-      const option = (value: string, content: (Node | string)[], checked: boolean): HTMLElement => {
-        const radio = h('input', { type: 'radio', name: group, value, checked });
-        radio.addEventListener('change', () => {
-          choice = value === NEW_PERSON ? { newPersonName: name } : { personId: value };
-          accept.disabled = false;
-        });
-        return h('label', { class: 'list-row' }, radio, ...content);
-      };
-      const candidates = pending.candidateIds.map((id) => store.person(id));
-      return h(
-        'fieldset',
-        { class: 'stack', style: 'border:none;padding:0;margin:0;width:100%;text-align:start' },
-        h('legend', { class: 'label' }, t('whichPerson', { name })),
-        ...candidates.map((person) =>
-          option(person.id, [avatar(person.name, groupColors(store, person), 'sm'), h('span', { class: 'grow ellipsis' }, bdi(person.name))], false),
-        ),
-        pending.canCreate
-          ? option(NEW_PERSON, [avatar(name, [], 'sm'), h('span', { class: 'grow' }, t('someoneNew', { name }))], candidates.length === 0)
-          : null,
-      );
-    }
-
-    accept.addEventListener('click', () => void decide(suggestion, true, choice, card, 1));
-    enableSwipe(card, (direction) => void decide(suggestion, direction === 1, choice, card, direction));
+    accept.addEventListener('click', () => void decide(suggestion, true, answers, card, 1));
+    enableSwipe(card, (direction) => void decide(suggestion, direction === 1, answers, card, direction));
+    const asks = unresolved !== null || suggestion.askKind;
     sheet.setBody(
       h(
         'div',
         { class: 'stack' },
         h('div', { class: 'suggestion-stage' }, card),
-        h('p', { class: 'caption', style: 'text-align:center' }, unresolved !== null ? t('chooseWhoFirst') : t('swipeHint')),
+        h('p', { class: 'caption', style: 'text-align:center' }, asks ? t('chooseWhoFirst') : t('swipeHint')),
       ),
     );
-    sheet.setFooter(h('button', { class: 'btn', onclick: () => void decide(suggestion, false, null, card, -1) }, t('skip')), accept);
-    sheet.open(unresolved !== null && unresolved.candidateIds.length > 2 ? 'full' : 'half');
+    sheet.setFooter(h('button', { class: 'btn', onclick: () => void decide(suggestion, false, answers, card, -1) }, t('skip')), accept);
+    sheet.open(asks ? 'full' : 'half');
   };
 
   show();
@@ -135,7 +180,7 @@ export function openSuggestionCards(ctx: AppContext): void {
 /** Horizontal drag with a little rotation; past the threshold it commits, otherwise springs back. */
 function enableSwipe(card: HTMLElement, onSwipe: (direction: 1 | -1) => void): void {
   card.addEventListener('pointerdown', (down) => {
-    // Let taps on the "which one?" choices work normally: capturing the pointer would swallow their clicks.
+    // Let taps on the choices work normally: capturing the pointer would swallow their clicks.
     if ((down.target as HTMLElement).closest('label, input, button') !== null) return;
     const startX = down.clientX;
     let dx = 0;

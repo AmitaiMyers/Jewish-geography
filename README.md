@@ -36,10 +36,16 @@ A Progressive Web App that maps everyone you know as a graph, shows how they are
 | `אמא של רז`, `אורנה אמא של הילה`, `Rivka (Sarah's mom)`, `אמא שאול` | parent of Raz / Hila / Sarah / Shaul |
 | `נעמה של ניצן` | Naama and Nitzan are a couple |
 | `שכנה של קרן`, `מזכירה של אריה`, `חברה של ניצן` | neighbour / colleague / friend of that person |
-| `פני וגרי סבא וסבתא` | split into two people: your grandparents, and a couple |
+| `פני וגרי סבא וסבתא`, `מיירס פני וג'רי` | split into two people: a couple (and your grandparents / family) |
 | `מתן שכן`, `חבר` | your neighbour / friend |
+| `המפקד נדב`, `גל ברזני מפקד`, `סיון מורה ללשון`, `רוני הבוס`, `ספיר מאמנת` | army / school / work / coach link to you |
+| `יוני מיירס` (your surname, in any of your names) | your relative — the card asks how |
+| `מיקה ❤️`, `אהוב שלי` | the "❤️" group |
+| `אמיתי מיירס` (one of your names) | merged into you; "This is me" merges anyone by hand |
 
-Ambiguous words are left alone on purpose: `דוד` is also David, `בן דוד` a surname, `כפר סבא` a city.
+Ambiguous words are left alone on purpose: `דוד` is also David, `בן דוד` a surname, `כפר סבא` a city, and
+`X וY` is only split when both are known first names or the rest is your surname (`וייס`, `וולף` are surnames).
+A shared phone never makes a contact "you": families share landlines.
 
 ## Development
 

@@ -160,3 +160,30 @@ test('rescanning names refreshes waiting suggestions without duplicating them', 
   await expect(page.locator('#toast')).toContainText('New groups: 0. New suggestions: 2.');
   await expect(page.getByRole('tab', { name: /Me/ }).locator('.badge')).toHaveText('2');
 });
+
+test('"This is me" adds my Hebrew name, so relatives by surname are found and the card asks how', async ({ page }) => {
+  page.on('dialog', (dialog) => void dialog.accept());
+  await onboard(page, 'Amitai Myers', '');
+  await importVcf(page, vcfFile(['אמיתי מיירס', 'יוני מיירס', 'המפקד נדב']));
+  await goToTab(page, /People/);
+  await page.locator('#view-people li', { hasText: 'אמיתי מיירס' }).getByRole('button').click();
+  await openSheet(page).getByRole('button', { name: 'This is me' }).click();
+  await page.locator('#toast').getByRole('button', { name: 'Look' }).click();
+  await page.locator('#toast').getByRole('button', { name: 'Review' }).click();
+
+  const cards = openSheet(page);
+  for (let i = 0; i < 2; i++) {
+    await expect(cards.getByText(`${i + 1} of 2`)).toBeVisible(); // the previous card has flown away
+    const asksHow = cards.getByRole('group', { name: 'How is יוני מיירס related to you?' });
+    if (await asksHow.count()) {
+      await expect(cards.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
+      await asksHow.getByText('My brother / sister').click();
+    }
+    await cards.getByRole('button', { name: 'Accept', exact: true }).click();
+  }
+  await expect(cards.getByRole('heading', { name: 'All reviewed!' })).toBeVisible();
+  await cards.getByRole('button', { name: 'Done' }).click();
+  await goToTab(page, /People/);
+  await expect(page.locator('#view-people li', { hasText: 'יוני מיירס' }).locator('.tag')).toHaveText('sibling');
+  await expect(page.locator('#view-people li', { hasText: 'אמיתי מיירס' })).toHaveCount(0);
+});

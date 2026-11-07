@@ -4,7 +4,7 @@ import { relationProblem } from './relationRules';
 import type { Person, Relation } from './types';
 
 function person(id: string, name: string, phones: string[] = []): Person {
-  return { id, name, gender: 'unknown', phones, emails: [], groupIds: [], notes: '', source: 'manual', createdAt: 0 };
+  return { id, name, gender: 'unknown', phones, emails: [], groupIds: [], otherNames: [], notes: '', source: 'manual', createdAt: 0 };
 }
 
 const existing = (from: string, to: string, type: Relation['type'], label = ''): Relation => ({

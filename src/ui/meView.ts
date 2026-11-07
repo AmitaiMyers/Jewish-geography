@@ -81,14 +81,7 @@ export class MeView implements View {
         'button',
         {
           class: 'option-card',
-          onclick: async (event: Event) => {
-            (event.currentTarget as HTMLElement).setAttribute('aria-busy', 'true');
-            const result = await store.rescanNames(t('servicesGroup'));
-            toast(t('rescanDone', { groups: result.groups, suggested: result.suggested }), {
-              success: true,
-              action: result.suggested > 0 ? { label: t('review'), run: () => this.ctx.openSuggestions() } : undefined,
-            });
-          },
+          onclick: () => void this.ctx.rescanNames(),
         },
         h('span', { class: 'option-icon' }, icon('sparkle')),
         h('span', { class: 'grow' }, h('span', { class: 'row-title' }, t('rescanTitle')), h('span', { class: 'row-sub' }, t('rescanHint'))),

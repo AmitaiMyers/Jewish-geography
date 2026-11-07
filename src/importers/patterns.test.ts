@@ -6,7 +6,7 @@ import { detectLabels, isServiceName } from './labels';
 import { parseNameHints, splitJointContact, suggestionsFromName } from './nameHints';
 
 function person(id: string, name: string, groupIds: string[] = []): Person {
-  return { id, name, gender: 'unknown', phones: [], emails: [], groupIds, notes: '', source: 'manual', createdAt: 0 };
+  return { id, name, gender: 'unknown', phones: [], emails: [], groupIds, otherNames: [], notes: '', source: 'manual', createdAt: 0 };
 }
 
 describe('more name patterns', () => {
@@ -64,17 +64,55 @@ describe('ambiguous and missing names', () => {
 });
 
 describe('splitJointContact', () => {
+  // Known first names (first word of other contacts) and my family's surnames.
+  const counts = { firstNames: new Map([['דני', 3], ['רונית', 2], ['יואב', 4], ['עדן', 5]]), familySurnames: new Set(['מיירס']) };
+
   it('splits two people who share a kinship phrase', () => {
-    const joint = splitJointContact({ name: 'פני וגרי סבא וסבתא', phones: ['050-1'], emails: [] });
-    expect(joint).toEqual({
+    expect(splitJointContact({ name: 'פני וגרי סבא וסבתא', phones: ['050-1'], emails: [] }, counts)).toEqual({
       first: { name: 'פני', phones: ['050-1'], emails: [] },
       second: { name: 'גרי', phones: [], emails: [] },
       role: 'סבא וסבתא',
     });
   });
 
-  it.each(['יואב וולף קרוספיט', 'דני ורונית כהן', 'מגי ותולי'])('keeps "%s" as one contact', (name) => {
-    expect(splitJointContact({ name, phones: [], emails: [] })).toBeNull();
+  it.each([
+    ["מיירס פני וג'רי", 'פני מיירס', "ג'רי מיירס"],
+    ['דני ורונית כהן', 'דני כהן', 'רונית כהן'],
+  ])('splits the couple "%s"', (name, first, second) => {
+    const joint = splitJointContact({ name, phones: [], emails: [] }, counts);
+    expect([joint?.first.name, joint?.second.name, joint?.role]).toEqual([first, second, null]);
+  });
+
+  it.each(['יואב וולף קרוספיט', 'מגי ותולי', 'שלום ורד 5', 'עדן וייס', 'אריק וינשטיין דו״ם'])('keeps "%s" as one contact', (name) => {
+    expect(splitJointContact({ name, phones: [], emails: [] }, counts)).toBeNull();
+  });
+});
+
+describe('roles toward me, family by surname', () => {
+  it.each([
+    ['המפקד נדב', 'army'],
+    ['גל ברזני מפקד', 'army'],
+    ['כנפו סגן מפקד', 'army'],
+    ['סיון מורה ללשון', 'school'],
+    ['רוני הבוס', 'work'],
+    ['אוסנת מנהלת', 'work'],
+    ['ספיר מאמנת', 'custom'],
+  ])('%s → %s link to me', (name, kind) => {
+    const [hint] = parseNameHints(name);
+    expect([hint?.entry.kind, hint?.anchorName]).toEqual([kind, null]);
+  });
+
+  it('labels a coach link', () => {
+    const coach = person('c', 'ספיר מאמנת');
+    expect(suggestionsFromName(coach, [person('me', 'Me'), coach], 'me')[0]).toMatchObject({ type: 'custom', label: 'מאמנת', to: 'me' });
+  });
+
+  it('asks how someone with my surname is related, using my other names too', () => {
+    const me = { ...person('me', 'Amitai Myers'), otherNames: ['אמיתי מיירס'] };
+    const yoni = person('y', 'יוני מיירס');
+    const [suggestion] = suggestionsFromName(yoni, [me, yoni], 'me');
+    expect(suggestion).toMatchObject({ from: 'y', to: 'me', type: 'relative', label: 'משפחת מיירס', askKind: true });
+    expect(suggestionsFromName(person('x', 'אמיתי מיירס'), [me], 'me')).toEqual([]); // that is me, not a relative
   });
 });
 
@@ -106,6 +144,14 @@ describe('labels and groups', () => {
     const services = plan.newGroups.find((group) => group.name === 'Services') as Group;
     expect(plan.updatedPeople.get(`p${names.indexOf('רמי מונית')}`)?.groupIds).toEqual([services.id]);
     expect(plan.updatedPeople.has(`p${names.indexOf('גל')}`)).toBe(false); // "גל" alone: no label
+  });
+
+  it('collects people with a heart in their name into a ❤️ group', () => {
+    const people = [person('me', 'Me'), person('a', 'מיקה ❤️'), person('b', 'אהוב שלי'), person('c', 'נועה')];
+    const plan = planNameGroups(people, [], 'me', 'Services');
+    const hearts = plan.newGroups.find((group) => group.name === '❤️') as Group;
+    expect([...plan.updatedPeople.keys()].sort()).toEqual(['a', 'b']);
+    expect(plan.updatedPeople.get('a')?.groupIds).toEqual([hearts.id]);
   });
 
   it('keeps inventing distinct hex colours after the presets run out', () => {

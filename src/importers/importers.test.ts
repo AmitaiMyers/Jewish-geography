@@ -7,7 +7,7 @@ import { parseFacebookFriends, repairFacebookText } from './facebook';
 import { findPersonByName, parseNameHints, suggestionsFromName } from './nameHints';
 
 function person(id: string, name: string): Person {
-  return { id, name, gender: 'unknown', phones: [], emails: [], groupIds: [], notes: '', source: 'manual', createdAt: 0 };
+  return { id, name, gender: 'unknown', phones: [], emails: [], groupIds: [], otherNames: [], notes: '', source: 'manual', createdAt: 0 };
 }
 
 describe('phoneMatchKey', () => {

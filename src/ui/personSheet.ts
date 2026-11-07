@@ -138,6 +138,21 @@ export class PersonSheet {
         : h(
             'button',
             {
+              class: 'btn btn-ghost',
+              onclick: async () => {
+                if (!confirm(t('confirmMergeMe', { name: person.name }))) return;
+                await store.mergeIntoMe(person.id);
+                toast(t('mergedIntoMe'), { success: true, action: { label: t('lookAgain'), run: () => this.ctx.rescanNames() } });
+              },
+            },
+            icon('me'),
+            t('thisIsMe'),
+          ),
+      isMe
+        ? null
+        : h(
+            'button',
+            {
               class: 'btn btn-ghost btn-danger',
               onclick: () => void this.ctx.deleteWithUndo(t('deletedPerson', { name: person.name }), () => store.deletePeople([person.id])),
             },
@@ -286,6 +301,7 @@ export class PersonSheet {
     );
     const phones = h('input', { value: person.phones.join(', '), inputmode: 'tel', autocomplete: isMe ? 'tel' : 'off' });
     const emails = h('input', { value: person.emails.join(', '), inputmode: 'email' });
+    const otherNames = h('input', { value: person.otherNames.join(', '), autocomplete: 'off' });
     const notes = h('textarea', { rows: 3 });
     notes.value = person.notes;
 
@@ -296,6 +312,7 @@ export class PersonSheet {
       field(t('gender'), gender),
       field(t('phones'), phones, isMe ? t('yourPhoneHint') : t('separateWithCommas')),
       field(t('emails'), emails, t('separateWithCommas')),
+      field(t('otherNames'), otherNames, t('separateWithCommas')),
       field(t('notes'), notes),
       h('button', { type: 'submit', class: 'btn btn-primary btn-block' }, t('save')),
     );
@@ -312,6 +329,7 @@ export class PersonSheet {
         gender: gender.value as Gender,
         phones: splitList(phones.value),
         emails: splitList(emails.value),
+        otherNames: splitList(otherNames.value),
         notes: notes.value,
       });
       toast(t('saved'), { success: true });

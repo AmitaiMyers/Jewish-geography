@@ -5,7 +5,7 @@ import { findOverlap } from './overlap';
 import { buildPayload, decodePayload, encodePayload, PAYLOAD_PREFIX, QR_MAX_CHARACTERS } from './payload';
 
 function person(id: string, name: string, phones: string[] = [], emails: string[] = []): Person {
-  return { id, name, gender: 'unknown', phones, emails, groupIds: [], notes: '', source: 'manual', createdAt: 0 };
+  return { id, name, gender: 'unknown', phones, emails, groupIds: [], otherNames: [], notes: '', source: 'manual', createdAt: 0 };
 }
 
 const phone = (i: number): string => `05${String(i).padStart(8, '0')}`;

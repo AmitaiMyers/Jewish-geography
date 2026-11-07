@@ -26,6 +26,8 @@ export interface AppContext {
   openCompare(mode: 'show' | 'scan'): void;
   addPerson(): Promise<void>;
   createGroup(): Promise<void>;
+  /** "Look for patterns in names" over everyone, then offer to review what was found. */
+  rescanNames(): Promise<void>;
   /** Runs a delete and offers Undo in the toast (no "are you sure?"). */
   deleteWithUndo(message: string, run: () => Promise<Snapshot>): Promise<void>;
 }
