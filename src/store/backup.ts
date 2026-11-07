@@ -36,7 +36,8 @@ function expectString(record: Record<string, unknown>, key: string, where: strin
 export function parseBackup(json: string): Backup {
   const data: unknown = JSON.parse(json);
   assert(isObject(data), 'backup must be a JSON object');
-  assert(data['app'] === 'jewish-geography', 'this is not a Jewish Geography backup file');
+  // 'jewish-geography' is the file format's id from before the app was renamed; kept so every backup still restores.
+  assert(data['app'] === 'jewish-geography', 'this is not a Pitzuchim backup file');
   assert(data['version'] === 1, `unsupported backup version ${String(data['version'])}`);
 
   const settings = data['settings'];

@@ -46,7 +46,7 @@ describe('payload', () => {
   });
 
   it.each([
-    ['hello', /not a Jewish Geography code/],
+    ['hello', /not a Pitzuchim code/],
     [`${PAYLOAD_PREFIX}AQ`, /cut short/],
     [`${PAYLOAD_PREFIX}*!`, /unexpected characters/],
   ])('rejects %s', (text, error) => {

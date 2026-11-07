@@ -145,7 +145,7 @@ export class MeView implements View {
             class: 'btn',
             onclick: () => {
               const date = new Date().toISOString().slice(0, 10);
-              downloadText(`jewish-geography-${date}.json`, JSON.stringify(store.exportBackup(), null, 2), 'application/json');
+              downloadText(`pitzuchim-${date}.json`, JSON.stringify(store.exportBackup(), null, 2), 'application/json');
             },
           },
           icon('backup'),

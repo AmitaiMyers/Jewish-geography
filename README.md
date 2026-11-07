@@ -1,4 +1,4 @@
-# Jewish Geography
+# Pitzuchim (פיצוחים)
 
 A Progressive Web App that maps everyone you know as a graph, shows how they are connected (family, friends, shul, yeshiva, camp, army, work…), and lets two people compare graphs in person to find who they both know. It works in English and Hebrew (right-to-left), on iPhone and Android, and offline.
 

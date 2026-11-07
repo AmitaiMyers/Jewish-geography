@@ -118,7 +118,7 @@ class Reader {
 /** Parses a scanned/pasted code. Throws a readable error for anything that is not ours. */
 export function decodePayload(raw: string): ComparePayload {
   const text = raw.trim();
-  assert(text.startsWith(PAYLOAD_PREFIX), 'this is not a Jewish Geography code');
+  assert(text.startsWith(PAYLOAD_PREFIX), 'this is not a Pitzuchim code');
   const reader = new Reader(fromBase64Url(text.slice(PAYLOAD_PREFIX.length)));
   assert(reader.u8() === VERSION, 'this code was made by a newer version of the app');
   const hashCount = reader.u8();

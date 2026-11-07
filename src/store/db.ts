@@ -14,6 +14,7 @@ export interface GeographyDB extends DBSchema {
 export type StoreName = 'people' | 'relations' | 'groups' | 'suggestions' | 'settings';
 export const DATA_STORES = ['people', 'relations', 'groups', 'suggestions'] as const;
 
+/** Unchanged since before the app was named Pitzuchim: renaming it would lose everyone's saved graph. */
 const DB_NAME = 'jewish-geography';
 const DB_VERSION = 1;
 

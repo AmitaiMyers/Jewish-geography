@@ -1,7 +1,7 @@
 /** UI strings. `he` must define every key `en` defines (enforced by the type). */
 
 export const en = {
-  appName: 'Jewish Geography',
+  appName: 'Pitzuchim',
   tabGraph: 'Graph',
   tabPeople: 'People',
   tabConnect: 'Connect',
@@ -174,7 +174,7 @@ export const en = {
   addPhoneForCompare: 'Add your phone number so friends can recognise you.',
   addPhone: 'Add phone',
   myCodeTitle: 'Your code',
-  myCodeHint: 'Your friend opens Jewish Geography → Connect → Scan their code.',
+  myCodeHint: 'Your friend opens Pitzuchim → Connect → Scan their code.',
   myCodePrivacy: 'The code holds your name, your phone and a scrambled fingerprint of your contacts — not the list itself.',
   shareCode: 'Share code',
   copied: 'Copied',
@@ -185,7 +185,7 @@ export const en = {
   cameraUnavailable: 'The camera isn’t available. Paste the code your friend shared instead.',
   pasteCode: 'Paste a code',
   pasteCodePlaceholder: 'JG1:…',
-  notACode: 'That isn’t a Jewish Geography code.',
+  notACode: 'That isn’t a Pitzuchim code.',
   openCodeFile: 'Open a code file',
   compare: 'Compare',
   overlapTitle: 'You and {name} both know {count}',
@@ -278,7 +278,7 @@ export const en = {
 export type StringKey = keyof typeof en;
 
 export const he: Record<StringKey, string> = {
-  appName: 'גאוגרפיה יהודית',
+  appName: 'פיצוחים',
   tabGraph: 'גרף',
   tabPeople: 'אנשים',
   tabConnect: 'קשר',
@@ -443,7 +443,7 @@ export const he: Record<StringKey, string> = {
   addPhoneForCompare: 'הוסיפו את מספר הטלפון שלכם כדי שחברים יזהו אתכם.',
   addPhone: 'הוספת טלפון',
   myCodeTitle: 'הקוד שלך',
-  myCodeHint: 'החבר/ה פותח/ת גאוגרפיה יהודית ← קשר ← סריקת הקוד שלהם.',
+  myCodeHint: 'החבר/ה פותח/ת פיצוחים ← קשר ← סריקת הקוד שלהם.',
   myCodePrivacy: 'הקוד כולל את שמך, הטלפון שלך וטביעת אצבע מעורבלת של אנשי הקשר — לא את הרשימה עצמה.',
   shareCode: 'שיתוף הקוד',
   copied: 'הועתק',
@@ -454,7 +454,7 @@ export const he: Record<StringKey, string> = {
   cameraUnavailable: 'המצלמה לא זמינה. הדביקו את הקוד שהחבר/ה שיתפ/ה.',
   pasteCode: 'הדבקת קוד',
   pasteCodePlaceholder: 'JG1:…',
-  notACode: 'זה לא קוד של גאוגרפיה יהודית.',
+  notACode: 'זה לא קוד של פיצוחים.',
   openCodeFile: 'פתיחת קובץ קוד',
   compare: 'השוואה',
   overlapTitle: 'את/ה ו{name} מכירים {count} משותפים',

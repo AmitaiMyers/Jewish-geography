@@ -14,8 +14,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icons/icon.svg', 'icons/apple-touch-icon.png'],
       manifest: {
-        name: 'Jewish Geography',
-        short_name: 'J-Geo',
+        name: 'Pitzuchim',
+        short_name: 'Pitzuchim',
         description: 'Map the people you know and discover how they are connected.',
         lang: 'en',
         theme_color: '#2b4c9b',
