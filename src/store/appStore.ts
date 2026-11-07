@@ -8,7 +8,7 @@ import { nextGroupColor } from '../model/groupColors';
 import { normalizeName } from '../model/identity';
 import { planNameGroups } from '../model/nameGroups';
 import { relationProblem } from '../model/relationRules';
-import type { EndpointChoice, FamilyKind, Gender, Group, Language, Person, PersonSource, Relation, RelationType, Settings, Suggestion } from '../model/types';
+import type { EndpointChoice, FamilyKind, Gender, Group, Language, Person, PersonSource, Relation, RelationType, Settings, SocialType, Suggestion } from '../model/types';
 import { DATA_STORES, openDatabase, type GeographyDB } from './db';
 import { parseBackup, type Backup } from './backup';
 
@@ -59,12 +59,16 @@ export interface ImportOptions {
   groupId: string | null;
   /** Name for the group of service contacts (taxis, deliveries…), in the user's language. */
   servicesGroupName: string;
-  /** People already in the graph who were in the imported source: they join `groupId` too. */
-  existingToGroup: readonly string[];
+  /** People already in the graph who were in the imported source: they join the group and get the link too. */
+  existingInSource: readonly string[];
+  /** "How do you know them?": link everyone in the source to me with this type, or null for no link. */
+  linkToMe: SocialType | null;
 }
 
 export interface ImportResult {
   added: number;
+  /** New links from everyone in the source to me ("How do you know them?"). */
+  linked: number;
   suggested: number;
   groups: number;
 }
@@ -78,6 +82,15 @@ type Listener = () => void;
 function upgradeSuggestion(suggestion: Suggestion): Suggestion {
   const saved = suggestion as Partial<Suggestion> & Omit<Suggestion, 'unresolved' | 'askKind'>;
   return { ...saved, unresolved: saved.unresolved ?? null, askKind: saved.askKind ?? false };
+}
+
+/** True when the suggested link (or, for an unresolved one, a link of that kind from its subject) already exists. */
+function alreadyLinked(suggestion: Suggestion, relations: readonly Relation[]): boolean {
+  if (suggestion.unresolved === null) {
+    return relationProblem(suggestion, relations) !== null;
+  }
+  const knownSide = suggestion.unresolved.side === 'from' ? 'to' : 'from';
+  return relations.some((relation) => relation.type === suggestion.type && relation[knownSide] === suggestion[knownSide]);
 }
 
 function unique<T>(values: readonly T[]): T[] {
@@ -350,18 +363,32 @@ export class AppStore {
     }
     added.forEach((person) => this.people.set(person.id, person));
     this.people.set(me.id, me);
+    const existing = options.existingInSource.filter((id) => id !== this.meId).map((id) => this.person(id));
     const joined: Person[] = [];
     if (options.groupId !== null) {
       const groupId = options.groupId;
-      for (const person of options.existingToGroup.map((id) => this.person(id)).filter((p) => !p.groupIds.includes(groupId))) {
+      for (const person of existing.filter((p) => !p.groupIds.includes(groupId))) {
         const updated = { ...person, groupIds: [...person.groupIds, groupId] };
         this.people.set(updated.id, updated);
         joined.push(updated);
       }
     }
 
-    const scan = await this.commitNameScan([...added, ...joined, me], jointSuggestionList, singles, options.servicesGroupName);
-    return { added: added.length, ...scan };
+    const links = options.linkToMe === null ? [] : this.linksToMe([...added, ...existing], options.linkToMe);
+    const scan = await this.commitNameScan([...added, ...joined, me], jointSuggestionList, singles, options.servicesGroupName, links);
+    return { added: added.length, linked: links.length, ...scan };
+  }
+
+  /** "Everyone in the 108 chat is my army friend": one link each, skipping links that already exist. */
+  private linksToMe(people: readonly Person[], type: SocialType): Relation[] {
+    const links: Relation[] = [];
+    for (const person of people) {
+      const draft = { from: person.id, to: this.meId, type, label: '' };
+      if (relationProblem(draft, [...this.relations.values(), ...links]) === null) {
+        links.push({ id: newId(), ...draft, createdAt: Date.now() });
+      }
+    }
+    return links;
   }
 
   /**
@@ -424,7 +451,7 @@ export class AppStore {
    * Suggestions still waiting for review are replaced by fresh ones (older rules may have read them
    * wrongly); links that already exist are not suggested again.
    */
-  async rescanNames(servicesGroupName: string): Promise<Omit<ImportResult, 'added'>> {
+  async rescanNames(servicesGroupName: string): Promise<Omit<ImportResult, 'added' | 'linked'>> {
     for (const duplicate of [...this.people.values()].filter((person) => person.id !== this.meId && this.isMe(person))) {
       await this.applyMergeIntoMe(duplicate.id);
     }
@@ -460,38 +487,33 @@ export class AppStore {
     extraSuggestions: Suggestion[],
     subjects: Person[],
     servicesGroupName: string,
-  ): Promise<Omit<ImportResult, 'added'>> {
+    newRelations: readonly Relation[] = [],
+  ): Promise<Omit<ImportResult, 'added' | 'linked'>> {
     const everyone = [...this.people.values()];
     const pendingKey = (suggestion: Suggestion): string => `${suggestion.subjectId}|${suggestion.type}|${suggestion.evidence}`;
     const pending = new Set([...this.suggestions.values()].map(pendingKey));
+    const relations = [...this.relations.values(), ...newRelations];
     const suggestions = [...extraSuggestions, ...subjects.flatMap((person) => suggestionsFromName(person, everyone, this.meId))].filter(
-      (suggestion) => !pending.has(pendingKey(suggestion)) && !this.alreadyLinked(suggestion),
+      (suggestion) => !pending.has(pendingKey(suggestion)) && !alreadyLinked(suggestion, relations),
     );
     const grouping = planNameGroups(everyone, [...this.groups.values()], this.meId, servicesGroupName);
 
     const toWrite = new Map(newPeople.map((person) => [person.id, person]));
     grouping.updatedPeople.forEach((person) => toWrite.set(person.id, person));
-    const tx = this.db.transaction(['people', 'groups', 'suggestions'], 'readwrite');
+    const tx = this.db.transaction(['people', 'groups', 'suggestions', 'relations'], 'readwrite');
     await Promise.all([
       ...grouping.newGroups.map((group) => tx.objectStore('groups').put(group)),
       ...[...toWrite.values()].map((person) => tx.objectStore('people').put(person)),
       ...suggestions.map((suggestion) => tx.objectStore('suggestions').put(suggestion)),
+      ...newRelations.map((relation) => tx.objectStore('relations').put(relation)),
       tx.done,
     ]);
+    newRelations.forEach((relation) => this.relations.set(relation.id, relation));
     grouping.newGroups.forEach((group) => this.groups.set(group.id, group));
     grouping.updatedPeople.forEach((person) => this.people.set(person.id, person));
     suggestions.forEach((suggestion) => this.suggestions.set(suggestion.id, suggestion));
     this.changed();
     return { suggested: suggestions.length, groups: grouping.newGroups.length };
-  }
-
-  /** True when the suggested link (or, for an unresolved one, a link of that kind from its subject) already exists. */
-  private alreadyLinked(suggestion: Suggestion): boolean {
-    if (suggestion.unresolved === null) {
-      return relationProblem(suggestion, this.relations.values()) !== null;
-    }
-    const knownSide = suggestion.unresolved.side === 'from' ? 'to' : 'from';
-    return [...this.relations.values()].some((relation) => relation.type === suggestion.type && relation[knownSide] === suggestion[knownSide]);
   }
 
   /**

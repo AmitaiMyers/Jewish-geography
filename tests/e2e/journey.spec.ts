@@ -203,13 +203,17 @@ test('an iPhone WhatsApp export (.zip) imports the group, and people already her
   const review = openSheet(page);
   await expect(review.getByRole('heading', { name: 'Who should come in?' })).toBeVisible();
   await expect(review.getByRole('textbox', { name: 'Group name' })).toHaveValue('108 משפחה');
-  await expect(review.getByText('People already in your graph join the group too.')).toBeVisible();
+  await expect(review.getByText('People already in your graph join the group and get the link too.')).toBeVisible();
+  await review.getByRole('combobox', { name: 'How do you know them?' }).selectOption('army');
   await expect(review.getByRole('checkbox', { name: 'Sarah Cohen' })).not.toBeChecked(); // already here
   await expect(review.locator('li')).toHaveCount(5); // no "You", no group pseudo-sender
   await review.getByRole('button', { name: 'Import 4' }).click();
-  await expect(page.locator('#toast')).toContainText('Added 4 people.');
+  await expect(page.locator('#toast')).toContainText('Added 4 people. Linked 5 people to you.');
+  // "המפקד חגי" is already linked as army: no duplicate suggestion for him.
+  await expect(page.locator('#toast')).not.toContainText('possible connection');
 
   await goToTab(page, /People/);
   await page.locator('#view-people li', { hasText: 'Sarah Cohen' }).getByRole('button').click();
   await expect(openSheet(page).getByRole('button', { name: '108 משפחה' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(openSheet(page).locator('.list-row', { hasText: 'Amitai' }).locator('.tag')).toHaveText('army / sherut friend');
 });

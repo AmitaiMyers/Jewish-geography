@@ -1,11 +1,11 @@
-import { t, tCount } from '../i18n/i18n';
+import { relationTypeName, t, tCount } from '../i18n/i18n';
 import { isContactPickerSupported, pickPhoneContacts } from '../importers/contactPicker';
 import { parseFacebookFriends } from '../importers/facebook';
 import type { RawContact } from '../importers/rawContact';
 import { parseVCards } from '../importers/vcard';
 import { readWhatsAppExport } from '../importers/whatsapp';
 import { planImport, type ImportCandidate } from '../model/importPlan';
-import type { PersonSource } from '../model/types';
+import { SOCIAL_TYPES, type PersonSource, type SocialType } from '../model/types';
 import { avatar } from './avatar';
 import { JgSheet } from './components/sheet';
 import type { AppContext } from './context';
@@ -98,6 +98,13 @@ export function openImportReview(ctx: AppContext, contacts: RawContact[], source
     ...[...store.groups.values()].map((group) => h('option', { value: group.id }, group.name)),
     h('option', { value: NEW_GROUP }, t('newGroupOption')),
   );
+  // "How do you know them?" — links everyone in this import (new and existing) to me.
+  const howKnown = h(
+    'select',
+    {},
+    h('option', { value: '' }, t('justAddThem')),
+    ...SOCIAL_TYPES.map((type) => h('option', { value: type }, relationTypeName(type))),
+  );
   const newGroupName = h('input', { value: suggestedGroupName, placeholder: t('groupName'), 'aria-label': t('groupName') });
   groupSelect.value = suggestedGroupName !== '' ? NEW_GROUP : '';
   const syncGroupInput = (): void => {
@@ -118,13 +125,20 @@ export function openImportReview(ctx: AppContext, contacts: RawContact[], source
           ? null
           : groupSelect.value;
     const picked = candidates.filter((c) => chosen.has(c)).map((c) => c.contact);
-    // People already in the graph are not added again, but they were in this chat: they join its group too.
-    const alreadyHere = groupId === null ? [] : candidates.flatMap((c) => (c.existingPersonId === null ? [] : [c.existingPersonId]));
-    const result = await store.importContacts(picked, source, { groupId, servicesGroupName: t('servicesGroup'), existingToGroup: alreadyHere });
+    // People already in the graph are not added again, but they were in this source: they join its group
+    // and get the "how do you know them" link too.
+    const alreadyHere = candidates.flatMap((c) => (c.existingPersonId === null ? [] : [c.existingPersonId]));
+    const result = await store.importContacts(picked, source, {
+      groupId,
+      servicesGroupName: t('servicesGroup'),
+      existingInSource: alreadyHere,
+      linkToMe: howKnown.value === '' ? null : (howKnown.value as SocialType),
+    });
     await sheet.close();
     haptic([10, 40, 10]);
     const message = [
       t('importDone', { added: result.added }),
+      result.linked > 0 ? tCount('importLinked', result.linked) : '',
       result.groups > 0 ? tCount('importGroups', result.groups) : '',
       result.suggested > 0 ? tCount('importSuggestions', result.suggested) : '',
     ]
@@ -148,8 +162,9 @@ export function openImportReview(ctx: AppContext, contacts: RawContact[], source
         h('span', { class: 'label' }, t('importIntoGroup')),
         groupSelect,
         newGroupName,
-        candidates.some((c) => c.existingPersonId !== null) ? h('span', { class: 'caption' }, t('existingJoinGroup')) : null,
+        candidates.some((c) => c.existingPersonId !== null) ? h('span', { class: 'caption' }, t('existingJoinIn')) : null,
       ),
+      h('label', { class: 'field' }, h('span', { class: 'label' }, t('howKnowThem')), howKnown),
       h('ul', { class: 'list' }, ...candidates.map((candidate) => candidateRow(candidate, chosen, refreshCount))),
     ),
   );
