@@ -174,3 +174,62 @@ Rules applied throughout:
 | Lighthouse performance budget in CI | Bundle-size budget (`npm run check:bundle`, 250 KB gzipped) plus axe in Playwright | Deterministic in CI; Lighthouse scores vary run to run. |
 | `--color-family` for family tags | New `--color-family-text` token (#8F4A2C light / #F0A875 dark) | Terracotta on its own tint measured 4.0:1 in axe; the text token gives 5.5:1 / 6.0:1. |
 | Undo instead of every confirmation | Undo for every delete; **Restore backup** still asks first | A restore replaces everything and has nothing to undo to. |
+
+## 9. New pattern: Pitzuchim reveal
+
+### Problem
+Discovering who two people both know is the reason the app exists, and it happens in person, phone to phone.
+The first version showed it as a plain checklist sheet: correct, but flat, and it said nothing about *why*
+those people matter (family? the army? university?).
+
+### Existing patterns
+| Related | Shared | Why it's not enough |
+|---|---|---|
+| `<jg-sheet>` | Modal, focus trap, Escape | A bottom sheet is a utility surface; this moment needs the whole screen. |
+| Suggestion cards | Avatars, pop-in motion | One item at a time; here the *count* and the *list* are the story. |
+| Success toast | Self-drawing check | Too small for the main payoff. |
+
+### Proposed design
+A full-screen celebratory dialog in three beats, then a calm list.
+
+1. **Crack** (≈900 ms): the two avatars slide in from opposite edges (mirrored in RTL) and meet in the
+   middle; on impact gold "seeds" burst outward and tumble (pitzuchim = cracked seeds), with a short haptic.
+2. **Count**: "Pitzuchim!" in gold, then "You and Yossi both know" over a huge number counting up to N.
+3. **Best pitzuach**: one highlighted line, the strongest shared link: family first
+   ("Your cousin Avi knows Yossi too!"), otherwise the biggest shared group ("7 of them are from מדמ"ח").
+4. **List**: shared people grouped as Family → your groups (largest first, with their colour) → Other,
+   rows staggering in. Each row: avatar, name, how *you* know them.
+
+#### API
+| Property | Type | Description |
+|---|---|---|
+| `mode: 'compare'` | `{ payload, overlap }` | After scanning a friend's code: nothing is saved until confirmed. Rows have a "knows them" switch (untick coincidences); footer: relation picker + **Add Yossi + 12 pitzuchim**. |
+| `mode: 'between'` | `{ aId, bId }` | Two people already in the graph (from a person sheet or Connect): rows open the person; footer: **Show on graph**. |
+
+#### States
+| State | Behaviour |
+|---|---|
+| Revealing | Fly-in, seed burst, count-up, list stagger (≤15 rows animated, rest instant). |
+| Some unticked | Row dims with a strike-through; the count and the CTA update live. |
+| None in common | No burst. "No pitzuchim… yet": the CTA still adds the friend. |
+| Confirming | CTA shows the spinner; then the dialog fades and the graph highlights the friend. |
+| Reduced motion | No fly-in, burst, count-up or stagger: final state at once, fades only. |
+
+#### Tokens
+- Colours (new, identical in both themes because the reveal is always dark): `--color-celebrate-1/2`
+  (`#13224A` → `#203873`, a tekhelet night gradient), `--color-celebrate-gold` (`#F2C14E`: seeds, the number,
+  the CTA), `--color-celebrate-text` (white) and `--color-celebrate-muted` (`#C9D4F0`);
+  `--color-secondary` as the second seed colour; group colours on section dots.
+- Type: `--text-hero` (new: 700 4.5rem/1) for the number; `--text-display` for "Pitzuchim!".
+- Motion: `--ease-spring`, `--dur-slow`, new `--dur-celebrate` (900 ms).
+
+### Accessibility
+- `role="dialog"` with `aria-modal`, labelled by the title and described by a one-sentence summary
+  ("Pitzuchim! You and Yossi both know 12 people.") that is also announced once through a live region.
+- The animated number, avatars and seeds are `aria-hidden`; the summary carries the meaning.
+- Sections are headings; rows are a list; the switches are real checkboxes labelled "Knows Yossi: Avi Levi".
+- Escape = "Not now". Focus starts on the title so screen readers read the result first.
+- Contrast, measured at the lighter end of the gradient (`#203873`): gold `#F2C14E` 6.7:1, white 11.2:1, muted `#C9D4F0` 7.5:1 (all pass AA; gold passes AAA for large text).
+
+### Open questions
+- Share the moment (a generated image to WhatsApp)? Deferred: it would reveal names to a third party.

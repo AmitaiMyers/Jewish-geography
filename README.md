@@ -14,7 +14,7 @@ A Progressive Web App that maps everyone you know as a graph, shows how they are
 | **Groups from names** | Labels shared by 5 or more contacts ("תומר מדמ"ח", "Liraz Axioma", "דניאל מילואים") become groups automatically. Service contacts (taxi, delivery, clinic…) go into a **Services** group. |
 | **Family inference** | From parent, spouse and sibling links, the app works out uncle, great-aunt, second cousin once removed, brother-in-law, mechutan… in English and Hebrew. |
 | **Connect** | For any two people: their family relation, the shortest chain (shown as a ribbon of avatars), and mutual connections. |
-| **Compare with a friend** (stage 2) | Show your QR code and scan theirs, or share the code as text (WhatsApp, AirDrop…). You see who you both know, confirm the list, and both graphs are linked. No server is involved. |
+| **Pitzuchim** (compare with a friend) | Show your code (an animated loop of QR codes) and scan theirs, or share it as text (WhatsApp, AirDrop…). The **Pitzuchim reveal** follows: your avatars meet, seeds crack open, and a count-up shows how many people you both know, with the best link called out ("Your cousin Avi knows Yossi too!") and everyone listed by how you know them. Untick coincidences, then add your friend. Replay it any time from a person's card ("✨ Our pitzuchim") or from Connect. No server is involved. |
 | **Organise** | Groups with colours, multi-select to group or delete people, Undo on every delete, and a search across people, groups and actions. |
 | **Private by default** | Everything is stored on the device (IndexedDB). JSON backup and restore. |
 
@@ -22,7 +22,7 @@ A Progressive Web App that maps everyone you know as a graph, shows how they are
 
 - **Shortest chain:** bidirectional BFS over an adjacency index, so it explores about 2·b^(d/2) nodes instead of b^d.
 - **Kinship:** each family walk becomes up / down / spouse steps, and its shape `[spouse] up^u down^d [spouse]` maps to a term ([`src/graph/kinship.ts`](src/graph/kinship.ts)). Everyone's relation to you comes from one BFS, cached per change.
-- **Comparing graphs:** a salted **Bloom filter** of your contacts' phone and email keys (about 11 bits per contact, ≈0.5% false matches). 500 contacts fit in one QR code ([`src/compare/`](src/compare)).
+- **Comparing graphs:** a salted **Bloom filter** of your contacts' phone and email keys (about 14 bits per contact, ≈0.1% false matches), shown as a short loop of QR frames that the scanner collects in any order ([`src/compare/`](src/compare)). Between two real 1,600–1,800-contact phones: 113 found, 112 real.
 - **Group outline:** the convex hull of the members' positions (monotone chain), redrawn every frame.
 - **Large graphs:** up to about 150 connected people, the force layout runs and nodes show initials. Above that, an O(n) **cluster layout** takes over (you, then family, then one disc per group on a ring) with plain coloured nodes. Unconnected contacts are hidden behind a chip and drawn as a spiral of dots on demand. 1,500 contacts import in a few seconds on a phone.
 - **Labels in names:** a word shared by enough contacts that isn't a first name (it usually comes first) or a common surname. Words that always appear together become one label ("באר שבע").

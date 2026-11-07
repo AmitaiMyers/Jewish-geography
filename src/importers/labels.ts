@@ -31,6 +31,8 @@ const SERVICE_WORDS = new Set([
 /** Common surnames and filler words that repeat across names without being a shared context. */
 const NOT_LABELS = new Set([
   'של', 'בן', 'בת', 'ה', 'ו', 'אמא', 'אבא', 'mom', 'dad', 'the', 'and',
+  // relation words (they become links, not groups) and generic words that join unrelated people
+  'חבר', 'חברה', 'בעלה', 'אשתו', 'בית', 'מרכז', 'דרך', 'חדש', 'חדשה', 'רמת', 'שירות', 'מספר', 'טלפון',
   'כהן', 'לוי', 'מזרחי', 'פרץ', 'ביטון', 'דהן', 'אברהם', 'פרידמן', 'אגבריה', 'מלכה', 'אזולאי', 'כץ', 'יוסף',
   'דוד', 'עמר', 'אוחיון', 'חדד', 'גבאי', 'שפירא', 'קליין', 'מימון', 'שלום', 'וקנין', 'גולדברג', 'רוזנברג',
   'אשכנזי', 'חזן', 'אוחנה', 'סויסה', 'יעקב', 'נחום', 'בכר', 'ששון', 'גרינברג', 'הרוש', 'לנדאו', 'ברגר',
@@ -49,7 +51,12 @@ export function nameWords(name: string): string[] {
 }
 
 /** Common alternative spellings that should count as one word ("כח אדם" = "כוח אדם"). */
-const SPELLING_VARIANTS: Record<string, string> = { 'כח': 'כוח' };
+const SPELLING_VARIANTS: Record<string, string> = {
+  'כח': 'כוח',
+  'ביביסטר': 'ביביסיטר',
+  'בייביסיטר': 'ביביסיטר',
+  'בייביסטר': 'ביביסיטר',
+};
 
 export function isServiceName(name: string): boolean {
   return nameWords(name).some((word) => SERVICE_WORDS.has(word));
@@ -83,7 +90,8 @@ function countWords(names: readonly string[]): Map<string, WordUse> {
       const spelling = rawWords.find((raw) => nameWords(raw).includes(word)) ?? word;
       use.spellings.set(spelling, (use.spellings.get(spelling) ?? 0) + 1);
       for (const neighbour of [words[position - 1], words[position + 1]]) {
-        if (neighbour !== undefined) {
+        // No phrases with a filler/relation word ("חברה של" is not a place someone belongs to).
+        if (neighbour !== undefined && !NOT_LABELS.has(neighbour)) {
           const pair = position > 0 && neighbour === words[position - 1] ? `${neighbour} ${word}` : `${word} ${neighbour}`;
           use.neighbours.set(pair, (use.neighbours.get(pair) ?? 0) + 1);
         }

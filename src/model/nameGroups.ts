@@ -1,4 +1,5 @@
 import { detectLabels, isServiceName, nameWords } from '../importers/labels';
+import { isPetOwner, petNames } from '../importers/nameHints';
 import { newId } from './assert';
 import { nextGroupColor } from './groupColors';
 import { normalizeName } from './identity';
@@ -8,7 +9,8 @@ import type { Group, Person } from './types';
  * Groups people by what their names say about them:
  *  - a label shared by enough contacts ("מדמ"ח", "אלתא", "תגלית") becomes a group of those contacts;
  *  - service contacts (taxi, delivery, clinic…) go into one services group;
- *  - names with a heart ("מיקה ❤️", "אהוב שלי") go into a "❤️" group of close people.
+ *  - names with a heart ("מיקה ❤️", "אהוב שלי") go into a "❤️" group of close people;
+ *  - dog owners ("שיר אמא של מנטה 🐶") go into a "🐶" group.
  * Existing groups with the same name are reused, so importing again does not duplicate them.
  * Pure: returns what to create/update; the store writes it.
  */
@@ -16,6 +18,7 @@ import type { Group, Person } from './types';
 /** Hearts or "my love" in a name mark someone close — a group, not a partner link (several can have hearts). */
 const CLOSE_PEOPLE = /[\u2764\u2665\u{1F495}\u{1F496}\u{1F497}\u{1F498}\u{1F49E}\u{1F60D}\u{1F970}]|אהוב שלי|אהובה שלי/u;
 const CLOSE_GROUP_NAME = '❤️';
+const PET_GROUP_NAME = '🐶';
 
 export interface NameGroupPlan {
   newGroups: Group[];
@@ -57,6 +60,12 @@ export function planNameGroups(people: readonly Person[], existingGroups: readon
   if (services.length > 0) {
     const group = ensureGroup(servicesGroupName);
     services.forEach((person) => addTo(person, group));
+  }
+  const pets = petNames(people.map((person) => person.name));
+  const petOwners = others.filter((person) => isPetOwner(person.name, pets));
+  if (petOwners.length > 0) {
+    const group = ensureGroup(PET_GROUP_NAME);
+    petOwners.forEach((person) => addTo(person, group));
   }
   const close = labelled.filter((person) => CLOSE_PEOPLE.test(person.name));
   if (close.length > 0) {

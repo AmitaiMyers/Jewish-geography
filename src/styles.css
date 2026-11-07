@@ -65,6 +65,15 @@
   --dur-slow: 450ms;
 
   --tabbar-height: 64px;
+
+  /* the Pitzuchim reveal is always dark, so these are the same in both themes */
+  --color-celebrate-1: #13224a;
+  --color-celebrate-2: #203873;
+  --color-celebrate-gold: #f2c14e;
+  --color-celebrate-text: #ffffff;
+  --color-celebrate-muted: #c9d4f0;
+  --text-hero: 700 4.5rem/1 var(--font-sans);
+  --dur-celebrate: 900ms;
   color-scheme: light;
 }
 
@@ -102,6 +111,7 @@
     --dur-fast: 0ms;
     --dur-base: 0ms;
     --dur-slow: 0ms;
+    --dur-celebrate: 0ms;
   }
 }
 
@@ -1321,6 +1331,25 @@ dialog.sheet[data-snap='peek']::backdrop {
   height: auto;
 }
 
+.qr-dots {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.qr-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border);
+  transition: background-color var(--dur-fast) linear, transform var(--dur-fast) var(--ease-spring);
+}
+
+.qr-dots span.is-on {
+  background: var(--color-primary);
+  transform: scale(1.3);
+}
+
 .scanner {
   position: relative;
   overflow: hidden;
@@ -1466,5 +1495,321 @@ dialog.sheet[data-snap='peek']::backdrop {
     animation-duration: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0ms !important;
+  }
+}
+
+/* ---------- Pitzuchim reveal (docs/DESIGN_SYSTEM.md §9) ---------- */
+
+dialog.pitz {
+  --fly: 1;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: none;
+  color: var(--color-celebrate-text);
+  background:
+    radial-gradient(circle at 50% 22%, rgb(242 193 78 / 0.22), transparent 45%),
+    linear-gradient(180deg, var(--color-celebrate-1), var(--color-celebrate-2));
+  overflow: hidden;
+}
+
+[dir='rtl'] dialog.pitz {
+  --fly: -1;
+}
+
+dialog.pitz[open] {
+  display: flex;
+  flex-direction: column;
+  animation: fade-in var(--dur-base) var(--ease-out);
+}
+
+dialog.pitz.is-closing {
+  animation: fade-out var(--dur-base) var(--ease-out) forwards;
+}
+
+dialog.pitz::backdrop {
+  background: var(--color-celebrate-1);
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.pitz-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: calc(env(safe-area-inset-top) + var(--space-6)) var(--space-4) var(--space-4);
+  text-align: center;
+}
+
+.pitz-scroll > * {
+  max-width: 560px;
+  margin-inline: auto;
+}
+
+.pitz-hero {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  height: 112px;
+}
+
+.pitz-avatar {
+  position: relative;
+  z-index: 1;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px var(--color-celebrate-1), 0 10px 30px rgb(0 0 0 / 0.35);
+}
+
+.pitz-avatar .avatar {
+  --size: 88px;
+}
+
+.pitz-a {
+  margin-inline-end: -8px;
+  animation: pitz-fly-a var(--dur-celebrate) var(--ease-spring) both;
+}
+
+.pitz-b {
+  margin-inline-start: -8px;
+  animation: pitz-fly-b var(--dur-celebrate) var(--ease-spring) both;
+}
+
+@keyframes pitz-fly-a {
+  from {
+    opacity: 0;
+    transform: translateX(calc(var(--fly) * -60vw)) rotate(calc(var(--fly) * -25deg));
+  }
+}
+
+@keyframes pitz-fly-b {
+  from {
+    opacity: 0;
+    transform: translateX(calc(var(--fly) * 60vw)) rotate(calc(var(--fly) * 25deg));
+  }
+}
+
+.pitz-burst {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  width: 0;
+  height: 0;
+}
+
+.pitz-seed {
+  position: absolute;
+  width: 9px;
+  height: 14px;
+  border-radius: 50% 50% 45% 45% / 60% 60% 40% 40%;
+  background: var(--color-celebrate-gold);
+  opacity: 0;
+  animation: pitz-crack 1500ms cubic-bezier(0.2, 0.7, 0.3, 1) calc(520ms + var(--delay)) both;
+}
+
+.pitz-seed.is-sand {
+  background: var(--color-secondary);
+}
+
+@keyframes pitz-crack {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0deg) scale(0.4);
+  }
+  45% {
+    opacity: 1;
+    transform: translate(var(--dx), var(--dy)) rotate(calc(var(--spin) * 0.5)) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx), calc(var(--dy) + var(--fall))) rotate(var(--spin)) scale(0.9);
+  }
+}
+
+.pitz-title {
+  margin-top: var(--space-4);
+  font: var(--text-display);
+  font-size: 2.25rem;
+  color: var(--color-celebrate-gold);
+  outline: none;
+  animation: pitz-pop var(--dur-slow) var(--ease-spring) 600ms both;
+}
+
+@keyframes pitz-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+.pitz-count {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  color: var(--color-celebrate-muted);
+  animation: pitz-pop var(--dur-slow) var(--ease-spring) 750ms both;
+}
+
+.pitz-number {
+  font: var(--text-hero);
+  color: var(--color-celebrate-gold);
+  text-shadow: 0 6px 30px rgb(242 193 78 / 0.35);
+}
+
+.pitz-highlight {
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid rgb(242 193 78 / 0.55);
+  border-radius: var(--radius-md);
+  background: rgb(242 193 78 / 0.12);
+  font: var(--text-heading);
+  animation: pitz-pop var(--dur-slow) var(--ease-spring) 1000ms both;
+}
+
+.pitz-muted {
+  margin-top: var(--space-2);
+  color: var(--color-celebrate-muted);
+  animation: pitz-row-in var(--dur-slow) var(--ease-out) 900ms both;
+}
+
+.pitz-section-title {
+  animation: pitz-row-in var(--dur-slow) var(--ease-out) 700ms both;
+}
+
+.pitz-hint {
+  font: var(--text-caption);
+}
+
+.pitz-list {
+  margin-top: var(--space-4);
+  text-align: start;
+}
+
+.pitz-section {
+  margin-top: var(--space-4);
+}
+
+.pitz-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+  font: var(--text-label);
+  color: var(--color-celebrate-muted);
+}
+
+.pitz .list > li + li {
+  border-top-color: rgb(255 255 255 / 0.1);
+}
+
+.pitz .list-row {
+  color: var(--color-celebrate-text);
+}
+
+.pitz .row-sub {
+  color: var(--color-celebrate-muted);
+}
+
+@media (hover: hover) {
+  .pitz .list-row:hover {
+    background: rgb(255 255 255 / 0.06);
+  }
+}
+
+.pitz .avatar[data-ring],
+.pitz .avatar {
+  --color-surface: var(--color-celebrate-1);
+}
+
+.pitz-row {
+  animation: pitz-row-in var(--dur-slow) var(--ease-out) both;
+  transition: opacity var(--dur-base) linear;
+}
+
+.pitz-row.is-out {
+  opacity: 0.45;
+}
+
+.pitz-row.is-out .row-title {
+  text-decoration: line-through;
+}
+
+@keyframes pitz-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+.pitz input[type='checkbox'] {
+  accent-color: var(--color-celebrate-gold);
+}
+
+.pitz-footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom));
+  border-top: 1px solid rgb(255 255 255 / 0.12);
+  background: rgb(19 34 74 / 0.92);
+}
+
+.pitz-footer > * {
+  width: 100%;
+  max-width: 560px;
+  margin-inline: auto;
+}
+
+.pitz-relation {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-celebrate-muted);
+  font: var(--text-label);
+}
+
+.pitz-relation select {
+  flex: 1;
+  border-color: transparent;
+  background: var(--color-celebrate-text);
+  color: var(--color-celebrate-1);
+}
+
+.pitz-footer .row .btn {
+  flex: 1;
+}
+
+.btn.pitz-cta {
+  flex: 2;
+  border-color: transparent;
+  background: var(--color-celebrate-gold);
+  color: var(--color-celebrate-1);
+  font-weight: 700;
+  box-shadow: 0 8px 24px rgb(242 193 78 / 0.3);
+}
+
+.btn.pitz-ghost {
+  border-color: rgb(255 255 255 / 0.25);
+  background: transparent;
+  color: var(--color-celebrate-text);
+}
+
+.btn.pitz-cta.is-loading::after {
+  border-color: var(--color-celebrate-1);
+  border-inline-end-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pitz-seed {
+    display: none;
   }
 }

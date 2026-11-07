@@ -43,11 +43,11 @@ Settings  { meId, language }
 
 | Step | What happens | Code |
 |---|---|---|
-| 1 | **Build a code.** My name, my own phone/email, and a salted Bloom filter of every contact's identity key (`p:<last 9 digits>` / `e:<email>`). About 11 bits per key; the filter shrinks to fit one QR code (≤ 2000 characters), accepting more false matches for very large graphs. | `src/compare/payload.ts`, `src/compare/bloom.ts` |
-| 2 | **Hand it over.** A QR code on screen, or shared as text through the share sheet (WhatsApp, AirDrop…) — copied to the clipboard where sharing is unavailable. A received code can be pasted or opened from a .txt file. | `src/ui/compareFlow.ts` |
+| 1 | **Build a code.** My name, my own phone/email, and a salted Bloom filter of every contact's identity key (`p:<last 9 digits>` / `e:<email>`), ≈14 bits per key (≈0.1% false matches). An earlier version squeezed it into one QR code; on an 1,800-contact phone that made 38% of matches false. | `src/compare/payload.ts`, `src/compare/bloom.ts` |
+| 2 | **Hand it over.** A loop of QR frames on screen (`JGQ:<id>:<i>/<n>:…`, ≈1000 characters each, collected in any order), or shared as text through the share sheet (WhatsApp, AirDrop…) — copied to the clipboard where sharing is unavailable. A received code can be pasted or opened from a .txt file. | `src/ui/compareFlow.ts`, `src/compare/qrFrames.ts` |
 | 3 | **Receive.** The camera scans it (jsQR, loaded only when needed), or the user pastes the code or opens the file. | `openScanner` |
 | 4 | **Overlap.** On the receiver's phone only: which of my contacts the filter says my friend knows, and whether my friend is already in my graph (matched by their phone or email). | `src/compare/overlap.ts` |
-| 5 | **Confirm and link.** The user unticks coincidences and chooses how they know the friend. One transaction then adds the friend if they are new, a link me ↔ friend, and a `knows` link friend ↔ each person we have in common. | `AppStore.applyComparison` |
+| 5 | **The Pitzuchim reveal, then confirm and link** (`src/ui/pitzuchim.ts`). The user unticks coincidences and chooses how they know the friend. One transaction then adds the friend if they are new, a link me ↔ friend, and a `knows` link friend ↔ each person we have in common. | `AppStore.applyComparison` |
 | 6 | **Both ways.** The friend does the same with my code. After that, shortest chains run through each other. | — |
 
 What the receiver learns: the sender's name and contact details (shared on purpose), and which of the receiver's *own* contacts the sender probably knows. The sender's full list is never sent, but see the caveat above: phone numbers can be tested against a filter.

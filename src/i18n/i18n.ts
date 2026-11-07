@@ -38,6 +38,8 @@ const SINGULAR: Partial<Record<StringKey, StringKey>> = {
   importGroups: 'importGroupsOne',
   importSuggestions: 'importSuggestionsOne',
   importLinked: 'importLinkedOne',
+  pitzSummary: 'pitzSummaryOne',
+  pitzAdd: 'pitzAddOne',
 };
 
 /** Like t(), choosing the singular form when count is 1. */

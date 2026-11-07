@@ -12,7 +12,9 @@ test.describe('first-run journey', () => {
     // Toast offers the suggestions found in contact names ("Mom", "Dad", "Rivka (Sarah's mom)").
     await page.locator('#toast').getByRole('button', { name: 'Review' }).click();
     const cards = openSheet(page);
-    for (let i = 0; i < 3; i++) {
+    // Mom → parent, Dad → parent, Rivka → Sarah's mother, and Mom + Dad as a couple (both are my parents).
+    for (let i = 0; i < 4; i++) {
+      await expect(cards.getByText(`${i + 1} of 4`)).toBeVisible();
       await cards.getByRole('button', { name: 'Accept', exact: true }).click();
     }
     await expect(cards.getByRole('heading', { name: 'All reviewed!' })).toBeVisible();
@@ -81,16 +83,27 @@ test('two friends compare graphs and see who they both know', async ({ browser }
   await openSheet(yossi).getByRole('textbox', { name: 'Paste a code' }).fill(code as string);
   await openSheet(yossi).getByRole('button', { name: 'Compare' }).click();
 
-  const review = openSheet(yossi);
-  await expect(review.getByRole('heading', { name: 'You and Amitai both know 1' })).toBeVisible();
-  await expect(review.getByText('Amitai is already in your graph.')).toBeVisible();
-  await expect(review.getByRole('checkbox', { name: 'Sarah C' })).toBeChecked();
-  await review.getByRole('button', { name: 'Add to my graph' }).click();
+  // The Pitzuchim reveal: full screen, title + summary, the shared person ticked.
+  const reveal = yossi.getByRole('dialog', { name: 'Pitzuchim!' });
+  await expect(reveal).toBeVisible();
+  await expect(reveal).toHaveAccessibleDescription('Pitzuchim! You and Amitai both know 1 person.');
+  await expect(reveal.locator('.pitz-number')).toHaveText('1');
+  await expect(reveal.getByText('Amitai is already in your graph.')).toBeVisible();
+  await expect(reveal.getByRole('checkbox', { name: 'Knows Amitai: Sarah C' })).toBeChecked();
+  await expectAccessible(yossi, 'pitzuchim reveal');
+  await reveal.getByRole('button', { name: 'Add Amitai + 1 pitzuach' }).click();
   await expect(yossi.locator('#toast')).toContainText('Amitai is now in your graph with 1 shared connection.');
 
   // Yossi can now trace a chain to Sarah through Amitai's link.
   await goToTab(yossi, /People/);
   await expect(yossi.locator('#view-people li', { hasText: 'Amitai' })).toContainText('2 connections');
+
+  // …and replay the moment from Amitai's card.
+  await yossi.locator('#view-people li', { hasText: 'Amitai' }).getByRole('button').click();
+  await openSheet(yossi).getByRole('button', { name: /Our pitzuchim · 1/ }).click();
+  const replay = yossi.getByRole('dialog', { name: 'Pitzuchim!' });
+  await expect(replay.getByRole('button', { name: 'Sarah C' })).toBeVisible();
+  await expect(replay.getByRole('button', { name: 'Show on graph' })).toBeVisible();
 });
 
 async function expectAccessible(page: Page, label: string): Promise<void> {

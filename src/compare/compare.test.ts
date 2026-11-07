@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Person } from '../model/types';
 import { bloomHas, bloomParameters, createBloomFilter } from './bloom';
 import { findOverlap } from './overlap';
-import { buildPayload, decodePayload, encodePayload, PAYLOAD_PREFIX, QR_MAX_CHARACTERS } from './payload';
+import { buildPayload, decodePayload, encodePayload, PAYLOAD_PREFIX } from './payload';
+import { FRAME_CHARACTERS, FrameCollector, toFrames } from './qrFrames';
 
 function person(id: string, name: string, phones: string[] = [], emails: string[] = []): Person {
   return { id, name, gender: 'unknown', phones, emails, groupIds: [], otherNames: [], notes: '', source: 'manual', createdAt: 0 };
@@ -30,19 +31,43 @@ describe('payload', () => {
   const me = person('me', 'Amitai Myers', ['+972 54-999-0000'], ['Amitai@Example.com']);
   const people = [me, ...Array.from({ length: 500 }, (_, i) => person(`p${i}`, `Person ${i}`, [phone(i)]))];
 
-  it('round-trips through text and fits in one QR code for 500 contacts', () => {
+  it('round-trips through text', () => {
     const encoded = encodePayload(buildPayload(me, people, 7));
     expect(encoded.startsWith(PAYLOAD_PREFIX)).toBe(true);
-    expect(encoded.length).toBeLessThanOrEqual(QR_MAX_CHARACTERS);
     const decoded = decodePayload(encoded);
     expect(decoded.name).toBe('Amitai Myers');
     expect(decoded.phones).toEqual(['972549990000']);
     expect(decoded.emails).toEqual(['amitai@example.com']);
   });
 
-  it('still fits for 3000 contacts by accepting more false positives', () => {
+  it('keeps false matches near 1 in 1,000 even for 3,000 contacts', () => {
     const many = [me, ...Array.from({ length: 3000 }, (_, i) => person(`p${i}`, `P${i}`, [phone(i)]))];
-    expect(encodePayload(buildPayload(me, many, 1)).length).toBeLessThanOrEqual(QR_MAX_CHARACTERS);
+    const strangers = Array.from({ length: 3000 }, (_, i) => person(`s${i}`, `S${i}`, [phone(100000 + i)]));
+    const filter = decodePayload(encodePayload(buildPayload(me, many, 1)));
+    const falseMatches = findOverlap(filter, strangers, 'none').commonIds.length;
+    expect(falseMatches).toBeLessThan(10);
+  });
+
+  it('splits a large code into QR frames that reassemble in any order', () => {
+    const many = [me, ...Array.from({ length: 1800 }, (_, i) => person(`p${i}`, `P${i}`, [phone(i)]))];
+    const code = encodePayload(buildPayload(me, many, 3));
+    const frames = toFrames(code);
+    expect(frames.length).toBeGreaterThan(1);
+    frames.forEach((frame) => expect(frame.length).toBeLessThanOrEqual(FRAME_CHARACTERS + 30));
+    const collector = new FrameCollector();
+    const progress = [...frames].reverse().map((frame) => collector.add(frame));
+    expect(progress[0]).toEqual({ have: 1, need: frames.length });
+    expect(collector.complete).toBe(code);
+  });
+
+  it('never mixes frames of two different codes', () => {
+    const many = [me, ...Array.from({ length: 1800 }, (_, i) => person(`p${i}`, `P${i}`, [phone(i)]))];
+    const first = toFrames(encodePayload(buildPayload(me, many, 1)));
+    const second = toFrames(encodePayload(buildPayload(me, many, 2)));
+    const collector = new FrameCollector();
+    collector.add(first[0] as string);
+    second.forEach((frame) => collector.add(frame));
+    expect(collector.complete).toBe(second.map((frame) => frame.replace(/^JGQ:[^:]+:\d+\/\d+:/, '')).join(''));
   });
 
   it.each([

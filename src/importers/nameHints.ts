@@ -27,6 +27,7 @@ type HintKind =
   | 'army'
   | 'school'
   | 'relative'
+  | 'knows'
   | 'custom';
 
 /** Most candidates shown on a card when a name is ambiguous. */
@@ -82,6 +83,11 @@ const VOCABULARY: Record<string, VocabularyEntry> = {
   eema: { kind: 'parentOfAnchor', gender: 'female' },
   'אמא': { kind: 'parentOfAnchor', gender: 'female' },
   'מאמא': { kind: 'parentOfAnchor', gender: 'female' },
+  'הורים': { kind: 'parentOfAnchor', gender: 'unknown' },
+  'ההורים': { kind: 'parentOfAnchor', gender: 'unknown' },
+  'אחותיי': { kind: 'sibling', gender: 'female' },
+  'בתדודה': { kind: 'relative', gender: 'female' },
+  'בןדוד': { kind: 'relative', gender: 'male' },
   mama: { kind: 'parentOfAnchor', gender: 'female' },
   son: { kind: 'childOfAnchor', gender: 'male' },
   daughter: { kind: 'childOfAnchor', gender: 'female' },
@@ -161,6 +167,37 @@ function lookup(phrase: string): Found | null {
 
 type Found = { word: string; entry: VocabularyEntry };
 
+/**
+ * Words that are only safe right before "של": alone, "בן"/"בת" are surname parts (Ben-David) and
+ * "בן דוד" is a surname, but "ענת בת של ורדה" and "ליאם בן דוד של שקד" are unambiguous.
+ */
+const OF_ONLY_VOCABULARY: Record<string, VocabularyEntry> = {
+  'בן': { kind: 'childOfAnchor', gender: 'male' },
+  'הבן': { kind: 'childOfAnchor', gender: 'male' },
+  'בת': { kind: 'childOfAnchor', gender: 'female' },
+  'הבת': { kind: 'childOfAnchor', gender: 'female' },
+  'בעלה': { kind: 'spouse', gender: 'male' },
+  'אשתו': { kind: 'spouse', gender: 'female' },
+  'אישתו': { kind: 'spouse', gender: 'female' },
+  'בן זוג': { kind: 'spouse', gender: 'male' },
+  'בת זוג': { kind: 'spouse', gender: 'female' },
+  'בן הזוג': { kind: 'spouse', gender: 'male' },
+  'בת הזוג': { kind: 'spouse', gender: 'female' },
+  'בן דוד': { kind: 'relative', gender: 'male' },
+  'בת דוד': { kind: 'relative', gender: 'female' },
+  'חייל': { kind: 'army', gender: 'male' },
+  'חיילת': { kind: 'army', gender: 'female' },
+  'פיזיו': { kind: 'work', gender: 'unknown' },
+  'שותף': { kind: 'custom', gender: 'male' },
+  'שותפה': { kind: 'custom', gender: 'female' },
+};
+
+function lookupBeforeOf(phrase: string): Found | null {
+  const word = normalizeName(phrase);
+  const entry = OF_ONLY_VOCABULARY[word];
+  return lookup(phrase) ?? (entry === undefined ? null : { word, entry });
+}
+
 /** "Sarah's dad" → anchor "Sarah", word "dad". */
 const POSSESSIVE = /([\p{L}][\p{L}\s.'-]*?)['’]s\s+([\p{L}-]+)/u;
 /** "dad of Sarah" / "משה אבא של שרה" → text before and after the connector. */
@@ -195,9 +232,31 @@ function leadingWord(text: string): { found: Found; rest: string } | null {
 }
 
 /** Tries the last two words, then the last word ("משה אבא" → "אבא"). */
-function trailingWord(text: string): Found | null {
+function trailingWord(text: string, find: (phrase: string) => Found | null = lookup): Found | null {
   const words = text.split(/\s+/);
-  return lookup(words.slice(-2).join(' ')) ?? lookup(words[words.length - 1] ?? '');
+  return find(words.slice(-2).join(' ')) ?? find(words[words.length - 1] ?? '');
+}
+
+/** "שירה בת דודה עדי": a family word between two names is the first person's relation to the second. */
+function kinshipInTheMiddle(words: readonly string[]): NameHint | null {
+  for (let i = 1; i < words.length - 1; i++) {
+    for (const size of [2, 1]) {
+      const found = lookup(words.slice(i, i + size).join(' '));
+      const after = cleanAnchor(words.slice(i + size).join(' '));
+      if (found !== null && FAMILY_KINDS.has(found.entry.kind) && after !== '') {
+        return { ...found, anchorName: after };
+      }
+    }
+  }
+  return null;
+}
+
+const FAMILY_KINDS = new Set<HintKind>(['parentOfAnchor', 'childOfAnchor', 'spouse', 'sibling', 'relative']);
+
+/** "(דרך עדן עמר)", "(מנקה דרך אוסי)": met through that person — the heart of Jewish geography. */
+function metThrough(annotation: string): NameHint | null {
+  const match = /(?:^|\s)דרך\s+(.+)$/u.exec(annotation);
+  return match === null ? null : { word: 'דרך', entry: { kind: 'knows', gender: 'unknown' }, anchorName: cleanAnchor(match[1] as string) };
 }
 
 /** A hint relative to someone named in the text, e.g. "Sarah's dad" or "אבא של שרה". */
@@ -212,7 +271,7 @@ function hintAboutSomeoneElse(segment: string): NameHint | null {
   const ofPhrase = OF_PHRASE.exec(segment);
   if (ofPhrase !== null) {
     const before = (ofPhrase[1] as string).trim();
-    const found = trailingWord(before);
+    const found = trailingWord(before, lookupBeforeOf);
     if (found !== null) {
       return { ...found, anchorName: cleanAnchor(ofPhrase[2] as string) };
     }
@@ -238,14 +297,23 @@ export function parseNameHints(name: string): NameHint[] {
     if (found !== null) {
       return [{ ...found, anchorName: null }];
     }
+    const through = metThrough(annotation);
+    if (through !== null) {
+      return [through];
+    }
   }
-  const plain = PLACE_PHRASES.reduce((text, place) => text.replace(place, ' '), withoutParentheses(name)).trim();
+  // Emoji glued to words ("אחותיי❤️") would hide them.
+  const plain = cleanAnchor(PLACE_PHRASES.reduce((text, place) => text.replace(place, ' '), withoutParentheses(name)));
   const leading = leadingWord(plain);
   if (leading === null) {
     // "לילך בת דודה": a name followed by a kinship word is that relation to me.
     const words = plain.split(/\s+/);
     const trailing = words.length >= 2 ? trailingWord(plain) : null;
     const isWholeName = trailing !== null && normalizeName(plain) === trailing.word;
+    const middle = kinshipInTheMiddle(words);
+    if (middle !== null) {
+      return [middle];
+    }
     if (trailing !== null && !isWholeName) {
       return [{ ...trailing, anchorName: null }];
     }
@@ -309,6 +377,7 @@ function linkFor(kind: HintKind, subjectId: string, anchorId: string): { from: s
     case 'army':
     case 'school':
     case 'relative':
+    case 'knows':
     case 'custom':
       return { from: subjectId, to: anchorId, type: kind };
   }
@@ -319,7 +388,7 @@ function linkFor(kind: HintKind, subjectId: string, anchorId: string): { from: s
  * "אמא של יושו" clearly means a child called Yoshu; "אמא אפיקים בנגב" is not a name.
  */
 function canCreateAnchor(kind: HintKind, name: string): boolean {
-  return (kind === 'parentOfAnchor' || kind === 'childOfAnchor') && !/\s/.test(name.trim());
+  return (kind === 'parentOfAnchor' || kind === 'childOfAnchor') && !/[\s\d]/.test(name.trim());
 }
 
 /** Last words of my names ("Amitai Myers", "אמיתי מיירס" → myers, מיירס): my family's surnames. */
@@ -491,4 +560,65 @@ export function jointSuggestions(first: Person, second: Person, role: string | n
     ...(role === null ? [] : [make(first.id, meId, 'relative', role, first.id), make(second.id, meId, 'relative', role, second.id)]),
     make(first.id, second.id, 'spouse', '', first.id),
   ];
+}
+
+// ---------- pets and co-parents ----------
+
+const PET_SIGN = /[\u{1F436}\u{1F9AE}\u{1F415}\u{1F429}\u{1F43E}\u{1F408}\u{1F431}]|כלב|לברדור|גולדן|רטריבר|פודל/u;
+
+/** Who a parent hint points at, as a comparable first name: "אמא של מנטה 🐶" → "מנטה". */
+function parentTargetKey(name: string): string | null {
+  const [hint] = parseNameHints(name);
+  if (hint === undefined || hint.entry.kind !== 'parentOfAnchor' || hint.anchorName === null || hint.anchorName === '') {
+    return null;
+  }
+  return normalizeName(hint.anchorName).split(' ')[0] as string;
+}
+
+/** Names of pets, from contacts like "שיר אמא של מנטה 🐶" or "דניאל אבא של שוקו לברדור". */
+export function petNames(names: readonly string[]): Set<string> {
+  return new Set(names.filter((name) => PET_SIGN.test(name)).flatMap((name) => parentTargetKey(name) ?? []));
+}
+
+/** "טל אמא של סנואו" is a dog owner when Snow is a pet in any contact (or this one has a pet sign). */
+export function isPetOwner(name: string, pets: ReadonlySet<string>): boolean {
+  const target = parentTargetKey(name);
+  return target !== null && (PET_SIGN.test(name) || pets.has(target));
+}
+
+/**
+ * Cross-contact clean-up of parent hints:
+ *  - a pet owner gets no "parent of …" suggestion (no dog becomes a person) — they go to the 🐶 group;
+ *  - two contacts who are parents of the same child or pet ("רותם אבא של סנואו", "טל אמא של סנואו")
+ *    are suggested as a couple.
+ */
+export function refineParentHints(suggestions: readonly Suggestion[], people: ReadonlyMap<string, Person>, pets: ReadonlySet<string>): Suggestion[] {
+  const parentHints = suggestions.filter((x) => x.type === 'parent' && x.from === x.subjectId);
+  const byTarget = new Map<string, Suggestion[]>();
+  for (const hint of parentHints) {
+    const target =
+      hint.unresolved !== null ? normalizeName(hint.unresolved.name).split(' ')[0] : `id:${hint.to}`;
+    byTarget.set(target as string, [...(byTarget.get(target as string) ?? []), hint]);
+  }
+  const couples: Suggestion[] = [];
+  for (const hints of byTarget.values()) {
+    const subjects = [...new Set(hints.map((hint) => hint.subjectId))];
+    if (subjects.length === 2) {
+      const [first, second] = subjects as [string, string];
+      couples.push({
+        id: newId(),
+        from: first,
+        to: second,
+        type: 'spouse',
+        label: '',
+        subjectId: first,
+        genderHint: 'unknown',
+        evidence: hints.map((hint) => hint.evidence).join(' + '),
+        unresolved: null,
+        askKind: false,
+      });
+    }
+  }
+  const kept = suggestions.filter((x) => !(parentHints.includes(x) && isPetOwner((people.get(x.subjectId) as Person).name, pets)));
+  return [...kept, ...couples];
 }

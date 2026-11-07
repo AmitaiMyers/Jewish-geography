@@ -3,7 +3,7 @@ import { nextGroupColor } from '../model/groupColors';
 import { planNameGroups } from '../model/nameGroups';
 import type { Group, Person } from '../model/types';
 import { detectLabels, isServiceName } from './labels';
-import { parseNameHints, splitJointContact, suggestionsFromName } from './nameHints';
+import { isPetOwner, parseNameHints, petNames, refineParentHints, splitJointContact, suggestionsFromName } from './nameHints';
 
 function person(id: string, name: string, groupIds: string[] = []): Person {
   return { id, name, gender: 'unknown', phones: [], emails: [], groupIds, otherNames: [], notes: '', source: 'manual', createdAt: 0 };
@@ -159,5 +159,66 @@ describe('labels and groups', () => {
     for (let i = 0; i < 40; i++) used.push(nextGroupColor(used));
     expect(new Set(used).size).toBe(40);
     used.forEach((color) => expect(color).toMatch(/^#[0-9a-f]{6}$/));
+  });
+});
+
+describe('patterns from a second address book', () => {
+  it.each([
+    ['ענת בת של ורדה', 'childOfAnchor', 'ורדה'],
+    ['שי אנקול הבן של שלמה', 'childOfAnchor', 'שלמה'],
+    ['ליאם בן דוד של שקד', 'relative', 'שקד'],
+    ['נדב בעלה של מירית', 'spouse', 'מירית'],
+    ['דור בן זוג של דורלי', 'spouse', 'דורלי'],
+    ['שירה בתדודה של עדי', 'relative', 'עדי'],
+    ['שירה בת דודה עדי', 'relative', 'עדי'],
+    ['הורים יובל לוזון', 'parentOfAnchor', 'יובל לוזון'],
+    ['חיילת של יוב', 'army', 'יוב'],
+    ['נעמה פיזיו של תומר צמחי', 'work', 'תומר צמחי'],
+    ['עומר לוי שותפה של דרור', 'custom', 'דרור'],
+    ['עדן פיזיו בלינסון (דרך עדן עמר)', 'knows', 'עדן עמר'],
+    ['שרלוט ( מנקה דרך אוסי)', 'knows', 'אוסי'],
+    ['עדן אחותיי❤️', 'sibling', null],
+  ])('%s → %s of %s', (name, kind, anchor) => {
+    const [hint] = parseNameHints(name);
+    expect([hint?.entry.kind, hint?.anchorName]).toEqual([kind, anchor]);
+  });
+
+  it('never offers to create a "child" whose name has digits (a street)', () => {
+    const tenant = person('t', 'ודים בעל דירה אבא אחימאיר10');
+    expect(suggestionsFromName(tenant, [person('me', 'Me'), tenant], 'me')).toEqual([]);
+  });
+});
+
+describe('dog parents and co-parents', () => {
+  const people = [
+    person('me', 'Me'),
+    person('a', 'שיר אמא של מנטה 🐶'),
+    person('b', 'רותם אבא של מנטה'),
+    person('c', 'טל אמא של יושו'),
+    person('d', 'גיא אבא של יושו'),
+  ];
+  const byId = new Map(people.map((p) => [p.id, p]));
+  const pets = petNames(people.map((p) => p.name));
+  const raw = people.flatMap((p) => suggestionsFromName(p, people, 'me'));
+
+  it('knows Menta is a pet, so both of her owners are dog owners', () => {
+    expect([...pets]).toEqual(['מנטה']);
+    expect(isPetOwner('רותם אבא של מנטה', pets)).toBe(true);
+    expect(isPetOwner('טל אמא של יושו', pets)).toBe(false);
+  });
+
+  it('drops "parent of the dog" and suggests the two owners (and the two parents) as couples', () => {
+    const refined = refineParentHints(raw, byId, pets);
+    expect(refined.filter((x) => x.type === 'parent').map((x) => x.subjectId).sort()).toEqual(['c', 'd']);
+    expect(refined.filter((x) => x.type === 'spouse').map((x) => [x.from, x.to])).toEqual([
+      ['a', 'b'],
+      ['c', 'd'],
+    ]);
+  });
+
+  it('puts dog owners in a 🐶 group', () => {
+    const plan = planNameGroups(people, [], 'me', 'Services');
+    const dogs = plan.newGroups.find((group) => group.name === '🐶') as Group;
+    expect([...plan.updatedPeople.values()].filter((p) => p.groupIds.includes(dogs.id)).map((p) => p.id).sort()).toEqual(['a', 'b']);
   });
 });

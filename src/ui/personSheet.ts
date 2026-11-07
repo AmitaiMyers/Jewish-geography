@@ -17,6 +17,7 @@ import { groupColors, relationToMeText, type AppContext } from './context';
 import { bdi, h, splitList, toast } from './dom';
 import { icon } from './icons';
 import { haptic, shake } from './motion';
+import { openPitzuchim, sharedBetween } from './pitzuchim';
 
 /**
  * Everything about one person: who they are to me, their groups and connections,
@@ -104,9 +105,23 @@ export class PersonSheet {
 
   private quickActions(person: Person, isMe: boolean): HTMLElement {
     const store = this.ctx.store;
+    const shared = isMe ? 0 : sharedBetween(store, store.meId, person.id).length;
     return h(
       'div',
       { class: 'row' },
+      shared === 0
+        ? null
+        : h(
+            'button',
+            {
+              class: 'btn btn-accent',
+              onclick: async () => {
+                await this.sheet.close();
+                openPitzuchim(this.ctx, { mode: 'between', aId: store.meId, bId: person.id });
+              },
+            },
+            `✨ ${t('pitzOpen')} · ${shared}`,
+          ),
       h(
         'button',
         {

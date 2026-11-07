@@ -6,6 +6,7 @@ import { JgPersonPicker } from './components/personPicker';
 import { groupColors, type AppContext, type View } from './context';
 import { bdi, h, replaceChildren } from './dom';
 import { icon } from './icons';
+import { openPitzuchim, sharedBetween } from './pitzuchim';
 
 /**
  * Two questions:
@@ -173,6 +174,9 @@ export class ConnectView implements View {
         'article',
         { class: 'card stack' },
         h('h3', {}, t('mutual'), h('span', { class: 'caption nums' }, ` · ${mutual.length}`)),
+        sharedBetween(store, from, to).length === 0
+          ? null
+          : h('button', { class: 'btn btn-accent', onclick: () => openPitzuchim(this.ctx, { mode: 'between', aId: from, bId: to }) }, `✨ ${t('showPitzuchim')}`),
         mutual.length === 0
           ? h('p', { class: 'muted' }, t('noMutual'))
           : h(

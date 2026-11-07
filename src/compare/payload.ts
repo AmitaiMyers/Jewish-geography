@@ -18,9 +18,14 @@ import { bloomParameters, createBloomFilter, type BloomFilter } from './bloom';
 
 export const PAYLOAD_PREFIX = 'JG1:';
 const VERSION = 1;
-/** Characters that still scan reliably from a phone screen (QR version ≈ 33, low error correction). */
-export const QR_MAX_CHARACTERS = 2000;
-const FALSE_POSITIVE_RATE = 0.005;
+/**
+ * ≈14 bits per contact: about 1 in 1,000 of my contacts falsely "matches". The code is not squeezed
+ * into one QR code any more (that pushed false matches to 38% for an 1,800-contact phone):
+ * it is shown as a short animated sequence of QR codes instead (see qrFrames.ts).
+ */
+const FALSE_POSITIVE_RATE = 0.001;
+/** Upper bound only against absurd inputs (128 KB of filter ≈ 70,000 contacts). */
+const MAX_FILTER_BITS = 1 << 20;
 const MAX_NAME_CHARACTERS = 60;
 const MAX_OWN_IDENTIFIERS = 4;
 
@@ -42,9 +47,7 @@ export function buildPayload(me: Person, people: readonly Person[], salt: number
   const phones = me.phones.map(normalizePhone).filter((phone) => phone.length > 0).slice(0, MAX_OWN_IDENTIFIERS);
   const emails = me.emails.map(normalizeEmail).filter((email) => email.length > 0).slice(0, MAX_OWN_IDENTIFIERS);
 
-  const headerBytes = encodeHeader(name, phones, emails).length + 10;
-  const budgetBytes = Math.floor(((QR_MAX_CHARACTERS - PAYLOAD_PREFIX.length) * 3) / 4) - headerBytes;
-  const { bitCount, hashCount } = bloomParameters(keys.length, FALSE_POSITIVE_RATE, Math.max(8, budgetBytes * 8));
+  const { bitCount, hashCount } = bloomParameters(keys.length, FALSE_POSITIVE_RATE, MAX_FILTER_BITS);
   return { name, phones, emails, filter: createBloomFilter(keys, bitCount, hashCount, salt) };
 }
 

@@ -1,7 +1,7 @@
 import type { IDBPDatabase } from 'idb';
 import { GraphIndex } from '../graph/graphIndex';
 import { classifyWalk, familyWalksFrom, type Kinship } from '../graph/kinship';
-import { jointSuggestions, splitEvidence, splitJointContact, suggestionsFromName } from '../importers/nameHints';
+import { jointSuggestions, petNames, refineParentHints, splitEvidence, splitJointContact, suggestionsFromName } from '../importers/nameHints';
 import type { RawContact } from '../importers/rawContact';
 import { assert, newId, required } from '../model/assert';
 import { nextGroupColor } from '../model/groupColors';
@@ -493,7 +493,12 @@ export class AppStore {
     const pendingKey = (suggestion: Suggestion): string => `${suggestion.subjectId}|${suggestion.type}|${suggestion.evidence}`;
     const pending = new Set([...this.suggestions.values()].map(pendingKey));
     const relations = [...this.relations.values(), ...newRelations];
-    const suggestions = [...extraSuggestions, ...subjects.flatMap((person) => suggestionsFromName(person, everyone, this.meId))].filter(
+    const fromNames = refineParentHints(
+      subjects.flatMap((person) => suggestionsFromName(person, everyone, this.meId)),
+      this.people,
+      petNames(everyone.map((person) => person.name)),
+    );
+    const suggestions = [...extraSuggestions, ...fromNames].filter(
       (suggestion) => !pending.has(pendingKey(suggestion)) && !alreadyLinked(suggestion, relations),
     );
     const grouping = planNameGroups(everyone, [...this.groups.values()], this.meId, servicesGroupName);

@@ -1,37 +1,48 @@
 import qrcode from 'qrcode-generator';
 import { findOverlap } from '../compare/overlap';
 import { buildPayload, decodePayload, encodePayload, PAYLOAD_PREFIX, type ComparePayload } from '../compare/payload';
-import { relationTypeName, t, tCount } from '../i18n/i18n';
-import { SOCIAL_TYPES, type RelationType } from '../model/types';
-import { avatar } from './avatar';
+import { FrameCollector, isCompareQr, toFrames } from '../compare/qrFrames';
+import { t } from '../i18n/i18n';
 import { JgSheet } from './components/sheet';
-import { groupColors, type AppContext } from './context';
-import { bdi, chooseTextFile, h, replaceChildren, toast } from './dom';
+import type { AppContext } from './context';
+import { chooseTextFile, h, toast } from './dom';
 import { icon } from './icons';
 import { haptic, shake } from './motion';
+import { openPitzuchim } from './pitzuchim';
 
 /**
  * Stage 2 — compare graphs with a friend, no server involved:
- *   show my code (QR / share)  →  friend scans it  →  friend reviews who we both know.
+ *   show my code (QR / share)  →  friend scans it  →  the Pitzuchim reveal shows who we both know.
  * Each side does the same, so both graphs end up linked.
  */
 
 const SCAN_INTERVAL_MS = 200;
 const MAX_SCAN_WIDTH = 800;
-const FRIEND_TYPES: readonly RelationType[] = [...SOCIAL_TYPES, 'sibling', 'spouse'];
+const FRAME_INTERVAL_MS = 450;
 
 export function openMyCode(ctx: AppContext): void {
   const store = ctx.store;
   const me = store.person(store.meId);
   const code = encodePayload(buildPayload(me, [...store.people.values()]));
-  const qr = qrcode(0, 'L');
-  qr.addData(code);
-  qr.make();
-
-  const qrCard = h('div', { class: 'qr-card', role: 'img', 'aria-label': t('myCodeTitle'), 'data-code': code });
-  qrCard.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  // Large codes are shown as a short loop of QR frames; the scanner collects them in any order.
+  const frames = toFrames(code).map((frameText) => {
+    const qr = qrcode(0, 'L');
+    qr.addData(frameText);
+    qr.make();
+    return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  });
+  const qrCard = h('div', { class: 'qr-card', role: 'img', 'aria-label': t('myCodeTitle'), 'data-code': code, 'data-frames': frames.length });
+  const dots = h('div', { class: 'qr-dots', 'aria-hidden': 'true' }, ...frames.map(() => h('span', {})));
+  let shown = 0;
+  const showFrame = (index: number): void => {
+    qrCard.innerHTML = frames[index] as string;
+    dots.querySelectorAll('span').forEach((dot, i) => dot.classList.toggle('is-on', i === index));
+  };
+  showFrame(0);
+  const cycle = frames.length > 1 ? window.setInterval(() => showFrame((shown = (shown + 1) % frames.length)), FRAME_INTERVAL_MS) : undefined;
 
   const sheet = JgSheet.create({ snaps: ['full'], disposable: true });
+  sheet.onClose(() => window.clearInterval(cycle));
   sheet.setTitle(t('myCodeTitle'));
   sheet.setBody(
     h(
@@ -56,6 +67,7 @@ export function openMyCode(ctx: AppContext): void {
           )
         : null,
       qrCard,
+      frames.length > 1 ? dots : null,
       h('p', {}, t('myCodeHint')),
       h('p', { class: 'caption' }, t('myCodePrivacy')),
       h(
@@ -122,6 +134,7 @@ export function openScanner(ctx: AppContext): void {
     await sheet.close();
     openOverlapReview(ctx, payload);
   };
+  const collector = new FrameCollector();
   const submitText = (text: string): void => {
     if (!text.trim().startsWith(PAYLOAD_PREFIX)) {
       pasteError.textContent = t('notACode');
@@ -199,9 +212,13 @@ export function openScanner(ctx: AppContext): void {
           context.drawImage(video, 0, 0, canvas.width, canvas.height);
           const image = context.getImageData(0, 0, canvas.width, canvas.height);
           const result = jsQR(image.data, image.width, image.height, { inversionAttempts: 'dontInvert' });
-          if (result !== null && result.data.startsWith(PAYLOAD_PREFIX)) {
-            void finish(result.data);
-            return;
+          if (result !== null && isCompareQr(result.data)) {
+            const progress = collector.add(result.data);
+            if (collector.complete !== null) {
+              void finish(collector.complete);
+              return;
+            }
+            status.textContent = t('scanProgress', { have: progress.have, need: progress.need });
           }
         }
         frame = window.requestAnimationFrame(tick);
@@ -210,85 +227,8 @@ export function openScanner(ctx: AppContext): void {
     }, cameraUnavailable);
 }
 
-/** Shows who we both know; nothing is written until the user confirms. */
+/** Shows who we both know — the Pitzuchim reveal; nothing is written until the user confirms there. */
 export function openOverlapReview(ctx: AppContext, payload: ComparePayload): void {
-  const store = ctx.store;
-  const overlap = findOverlap(payload, [...store.people.values()], store.meId);
-  const chosen = new Set(overlap.commonIds);
-  const friendName = overlap.friendId === null ? payload.name : store.person(overlap.friendId).name;
-  const sheet = JgSheet.create({ snaps: ['full'], disposable: true });
-
-  const relationSelect = h(
-    'select',
-    { 'aria-label': t('connectionType') },
-    ...FRIEND_TYPES.map((type) => h('option', { value: type, selected: type === 'friend' }, relationTypeName(type))),
-  );
-  const confirm = h('button', { class: 'btn btn-primary' }, t('confirmAdd'));
-  confirm.addEventListener('click', async () => {
-    confirm.classList.add('is-loading');
-    const friendId = await store.applyComparison({
-      friendId: overlap.friendId,
-      newFriend: { name: payload.name, phones: payload.phones, emails: payload.emails },
-      relationType: relationSelect.value as RelationType,
-      label: '',
-      commonIds: [...chosen],
-    });
-    await sheet.close();
-    haptic([10, 40, 10]);
-    toast(tCount('compareDone', chosen.size, { name: friendName }), { success: true });
-    ctx.showOnGraph({ kind: 'person', personId: friendId });
-  });
-
-  const list = h('ul', { class: 'list' });
-  replaceChildren(
-    list,
-    ...overlap.commonIds.map((id) => {
-      const person = store.person(id);
-      const checkbox = h('input', { type: 'checkbox', checked: true, 'aria-label': person.name });
-      checkbox.addEventListener('change', () => {
-        if (checkbox.checked) chosen.add(id);
-        else chosen.delete(id);
-      });
-      return h(
-        'li',
-        {},
-        h(
-          'label',
-          { class: 'list-row' },
-          checkbox,
-          avatar(person.name, groupColors(store, person), 'sm'),
-          h('span', { class: 'grow ellipsis' }, bdi(person.name)),
-        ),
-      );
-    }),
-  );
-
-  sheet.setTitle(t('overlapTitle', { name: friendName, count: overlap.commonIds.length }));
-  sheet.setBody(
-    h(
-      'div',
-      { class: 'stack-lg' },
-      h(
-        'div',
-        { class: 'card stack' },
-        h(
-          'div',
-          { class: 'row' },
-          avatar(friendName, [], 'lg'),
-          h(
-            'div',
-            { class: 'grow' },
-            h('p', { class: 'big-answer' }, bdi(friendName)),
-            h('p', { class: 'caption' }, overlap.friendId === null ? t('friendNew', { name: friendName }) : t('friendKnown', { name: friendName })),
-          ),
-        ),
-        h('label', { class: 'field' }, h('span', { class: 'label' }, t('friendIs', { name: friendName })), relationSelect),
-      ),
-      overlap.commonIds.length === 0
-        ? h('p', { class: 'muted' }, t('overlapNone', { name: friendName }))
-        : h('div', { class: 'stack' }, h('p', { class: 'caption' }, t('overlapHint')), list),
-    ),
-  );
-  sheet.setFooter(h('button', { class: 'btn', onclick: () => void sheet.close() }, t('cancel')), confirm);
-  sheet.open();
+  const overlap = findOverlap(payload, [...ctx.store.people.values()], ctx.store.meId);
+  openPitzuchim(ctx, { mode: 'compare', payload, overlap });
 }
