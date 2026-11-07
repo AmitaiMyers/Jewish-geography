@@ -9,7 +9,7 @@ A Progressive Web App that maps everyone you know as a graph, shows how they are
 | Area | What you get |
 |---|---|
 | **Graph** | Avatars with initials, ringed in their groups' colours. Family links are terracotta, social links are slate. Tapping a group outlines its cluster. Chains light up step by step in gold. New people pop out from "me". There is a quick-action button, plus a keyboard and screen-reader list version of the graph. |
-| **Import** | **Android:** pick phone contacts directly. **iPhone / Google:** a `.vcf` file. **WhatsApp:** an exported chat (it can become a group). **Facebook:** `friends.json`. Duplicates are detected by phone or email and left unticked in the review screen. |
+| **Import** | **Android:** pick phone contacts directly. **iPhone / Google:** a `.vcf` file. **WhatsApp:** an exported chat — the `.zip` from iPhone or the `.txt` from Android — becomes a group; people already in your graph join it too. **Facebook:** `friends.json`. Duplicates are detected by phone or email and left unticked in the review screen. |
 | **Suggestions** | Contact names become suggested links, reviewed one card at a time (swipe or tap). See [Name patterns](#name-patterns). When a name fits several people ("אמא של רז"), the card asks which one; a missing child ("אמא של יושו") can be added. |
 | **Groups from names** | Labels shared by 5 or more contacts ("תומר מדמ"ח", "Liraz Axioma", "דניאל מילואים") become groups automatically. Service contacts (taxi, delivery, clinic…) go into a **Services** group. |
 | **Family inference** | From parent, spouse and sibling links, the app works out uncle, great-aunt, second cousin once removed, brother-in-law, mechutan… in English and Hebrew. |
