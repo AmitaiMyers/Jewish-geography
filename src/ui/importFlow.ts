@@ -3,13 +3,13 @@ import { isContactPickerSupported, pickPhoneContacts } from '../importers/contac
 import { parseFacebookFriends } from '../importers/facebook';
 import type { RawContact } from '../importers/rawContact';
 import { parseVCards } from '../importers/vcard';
-import { parseWhatsAppChat } from '../importers/whatsapp';
+import { readWhatsAppExport } from '../importers/whatsapp';
 import { planImport, type ImportCandidate } from '../model/importPlan';
 import type { PersonSource } from '../model/types';
 import { avatar } from './avatar';
 import { JgSheet } from './components/sheet';
 import type { AppContext } from './context';
-import { bdi, chooseTextFile, h, toast } from './dom';
+import { bdi, chooseFile, chooseTextFile, h, toast } from './dom';
 import { icon, type IconName } from './icons';
 import { haptic } from './motion';
 
@@ -42,12 +42,13 @@ export function importOptionCards(ctx: AppContext, onPicked: () => void = () => 
     option('file', t('importVcard'), t('importVcardHint'), () =>
       fromFile('.vcf,text/vcard,text/x-vcard', (file) => review(parseVCards(file.text), 'vcard')),
     ),
-    option('chat', t('importWhatsapp'), t('importWhatsappHint'), () =>
-      fromFile('.txt,text/plain', (file) => {
-        const chat = parseWhatsAppChat(file.text, file.name);
-        review(chat.contacts, 'whatsapp', chat.chatName);
-      }),
-    ),
+    option('chat', t('importWhatsapp'), t('importWhatsappHint'), async () => {
+      // iPhone exports a .zip (with _chat.txt inside); Android exports the .txt itself.
+      const file = await chooseFile('.zip,.txt,application/zip,application/x-zip-compressed,text/plain');
+      if (file === null) return;
+      const chat = await readWhatsAppExport(file.name, new Uint8Array(await file.arrayBuffer()));
+      review(chat.contacts, 'whatsapp', chat.chatName);
+    }),
     option('globe', t('importFacebook'), t('importFacebookHint'), () =>
       fromFile('.json,application/json', (file) => review(parseFacebookFriends(file.text), 'facebook')),
     ),
@@ -117,7 +118,9 @@ export function openImportReview(ctx: AppContext, contacts: RawContact[], source
           ? null
           : groupSelect.value;
     const picked = candidates.filter((c) => chosen.has(c)).map((c) => c.contact);
-    const result = await store.importContacts(picked, source, { groupId, servicesGroupName: t('servicesGroup') });
+    // People already in the graph are not added again, but they were in this chat: they join its group too.
+    const alreadyHere = groupId === null ? [] : candidates.flatMap((c) => (c.existingPersonId === null ? [] : [c.existingPersonId]));
+    const result = await store.importContacts(picked, source, { groupId, servicesGroupName: t('servicesGroup'), existingToGroup: alreadyHere });
     await sheet.close();
     haptic([10, 40, 10]);
     const message = [
@@ -139,7 +142,14 @@ export function openImportReview(ctx: AppContext, contacts: RawContact[], source
     h(
       'div',
       { class: 'stack' },
-      h('label', { class: 'field' }, h('span', { class: 'label' }, t('importIntoGroup')), groupSelect, newGroupName),
+      h(
+        'label',
+        { class: 'field' },
+        h('span', { class: 'label' }, t('importIntoGroup')),
+        groupSelect,
+        newGroupName,
+        candidates.some((c) => c.existingPersonId !== null) ? h('span', { class: 'caption' }, t('existingJoinGroup')) : null,
+      ),
       h('ul', { class: 'list' }, ...candidates.map((candidate) => candidateRow(candidate, chosen, refreshCount))),
     ),
   );

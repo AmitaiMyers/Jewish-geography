@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { goToTab, importVcf, onboard, openSheet, vcfFile } from './helpers';
+import { readFileSync } from 'node:fs';
+import { fixture, goToTab, importVcf, onboard, openSheet, vcfFile } from './helpers';
 
 test.describe('first-run journey', () => {
   test('onboard, import, review suggestions, infer family, find a chain', async ({ page }) => {
@@ -93,7 +94,9 @@ test('two friends compare graphs and see who they both know', async ({ browser }
 });
 
 async function expectAccessible(page: Page, label: string): Promise<void> {
-  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  // @axe-core/playwright is typed against a newer playwright-core than the pinned test runner; same runtime API.
+  const axePage = page as unknown as ConstructorParameters<typeof AxeBuilder>[0]['page'];
+  const results = await new AxeBuilder({ page: axePage }).withTags(['wcag2a', 'wcag2aa']).analyze();
   const serious = results.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical');
   expect(
     serious.map((violation) => `${label}: ${violation.id} — ${violation.help} — ${violation.nodes.map((node) => `${node.target.join(' ')} ${node.failureSummary ?? ''}`).join(' | ')}`),
@@ -186,4 +189,27 @@ test('"This is me" adds my Hebrew name, so relatives by surname are found and th
   await goToTab(page, /People/);
   await expect(page.locator('#view-people li', { hasText: 'יוני מיירס' }).locator('.tag')).toHaveText('sibling');
   await expect(page.locator('#view-people li', { hasText: 'אמיתי מיירס' })).toHaveCount(0);
+});
+
+test('an iPhone WhatsApp export (.zip) imports the group, and people already here join it', async ({ page }) => {
+  await onboard(page, 'Amitai', '');
+  await importVcf(page, 'family.vcf'); // includes Sarah Cohen
+  await goToTab(page, /^Me/);
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: /WhatsApp chat/ }).click();
+  const zip = readFileSync(fixture('whatsapp-iphone.zip'));
+  await (await chooser).setFiles({ name: 'WhatsApp Chat - 108 משפחה.zip', mimeType: 'application/zip', buffer: zip });
+
+  const review = openSheet(page);
+  await expect(review.getByRole('heading', { name: 'Who should come in?' })).toBeVisible();
+  await expect(review.getByRole('textbox', { name: 'Group name' })).toHaveValue('108 משפחה');
+  await expect(review.getByText('People already in your graph join the group too.')).toBeVisible();
+  await expect(review.getByRole('checkbox', { name: 'Sarah Cohen' })).not.toBeChecked(); // already here
+  await expect(review.locator('li')).toHaveCount(5); // no "You", no group pseudo-sender
+  await review.getByRole('button', { name: 'Import 4' }).click();
+  await expect(page.locator('#toast')).toContainText('Added 4 people.');
+
+  await goToTab(page, /People/);
+  await page.locator('#view-people li', { hasText: 'Sarah Cohen' }).getByRole('button').click();
+  await expect(openSheet(page).getByRole('button', { name: '108 משפחה' })).toHaveAttribute('aria-pressed', 'true');
 });

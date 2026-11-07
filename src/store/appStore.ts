@@ -59,6 +59,8 @@ export interface ImportOptions {
   groupId: string | null;
   /** Name for the group of service contacts (taxis, deliveries…), in the user's language. */
   servicesGroupName: string;
+  /** People already in the graph who were in the imported source: they join `groupId` too. */
+  existingToGroup: readonly string[];
 }
 
 export interface ImportResult {
@@ -348,8 +350,17 @@ export class AppStore {
     }
     added.forEach((person) => this.people.set(person.id, person));
     this.people.set(me.id, me);
+    const joined: Person[] = [];
+    if (options.groupId !== null) {
+      const groupId = options.groupId;
+      for (const person of options.existingToGroup.map((id) => this.person(id)).filter((p) => !p.groupIds.includes(groupId))) {
+        const updated = { ...person, groupIds: [...person.groupIds, groupId] };
+        this.people.set(updated.id, updated);
+        joined.push(updated);
+      }
+    }
 
-    const scan = await this.commitNameScan([...added, me], jointSuggestionList, singles, options.servicesGroupName);
+    const scan = await this.commitNameScan([...added, ...joined, me], jointSuggestionList, singles, options.servicesGroupName);
     return { added: added.length, ...scan };
   }
 

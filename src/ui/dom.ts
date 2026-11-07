@@ -119,15 +119,18 @@ export function downloadText(fileName: string, text: string, mime: string): void
   URL.revokeObjectURL(url);
 }
 
-/** Opens the system file chooser and resolves with the chosen file's text (null if cancelled). */
-export function chooseTextFile(accept: string): Promise<{ name: string; text: string } | null> {
+/** Opens the system file chooser and resolves with the chosen file (null if cancelled). */
+export function chooseFile(accept: string): Promise<File | null> {
   return new Promise((resolve) => {
     const input = h('input', { type: 'file', accept });
-    input.addEventListener('change', async () => {
-      const file = input.files?.[0];
-      resolve(file === undefined ? null : { name: file.name, text: await file.text() });
-    });
+    input.addEventListener('change', () => resolve(input.files?.[0] ?? null));
     input.addEventListener('cancel', () => resolve(null));
     input.click();
   });
+}
+
+/** Like chooseFile, resolving with the file's text. */
+export async function chooseTextFile(accept: string): Promise<{ name: string; text: string } | null> {
+  const file = await chooseFile(accept);
+  return file === null ? null : { name: file.name, text: await file.text() };
 }
